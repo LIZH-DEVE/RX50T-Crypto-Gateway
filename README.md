@@ -137,14 +137,21 @@ GUI real-board walkthrough verified:
 
 GUI file-encryption walkthrough verified:
 - `SM4` file demo through the Tkinter GUI: pass
-- input sample:
-  - `contest_project/demo_assets/demo_sm4_32b.bin`
-- generated output:
-  - `contest_project/demo_assets/demo_sm4_32b.bin.sm4.bin`
-- expected reference:
-  - `contest_project/demo_assets/expected_sm4_32b.bin`
+  - input sample:
+    - `contest_project/demo_assets/demo_sm4_32b.bin`
+  - generated output:
+    - `contest_project/demo_assets/demo_sm4_32b.bin.sm4.bin`
+  - expected reference:
+    - `contest_project/demo_assets/expected_sm4_32b.bin`
+- `AES` file demo through the Tkinter GUI: pass
+  - input sample:
+    - `contest_project/demo_assets/demo_aes_32b.bin`
+  - generated output:
+    - `contest_project/demo_assets/demo_aes_32b.bin.aes.bin`
+  - expected reference:
+    - `contest_project/demo_assets/expected_aes_32b.bin`
 - result:
-  - generated file matched the expected ciphertext exactly
+  - both generated files matched their expected ciphertext references exactly
 
 ## Relation to the Original Project
 

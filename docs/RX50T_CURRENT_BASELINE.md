@@ -259,18 +259,25 @@ Representative real-board results:
 ### GUI File-Encryption Walkthrough
 
 Verified on the real board through the Tkinter GUI path:
-- algorithm: `SM4`
-- input file:
-  - `contest_project/demo_assets/demo_sm4_32b.bin`
-- output file:
-  - `contest_project/demo_assets/demo_sm4_32b.bin.sm4.bin`
-- expected reference:
-  - `contest_project/demo_assets/expected_sm4_32b.bin`
+- `SM4`
+  - input file:
+    - `contest_project/demo_assets/demo_sm4_32b.bin`
+  - output file:
+    - `contest_project/demo_assets/demo_sm4_32b.bin.sm4.bin`
+  - expected reference:
+    - `contest_project/demo_assets/expected_sm4_32b.bin`
+- `AES`
+  - input file:
+    - `contest_project/demo_assets/demo_aes_32b.bin`
+  - output file:
+    - `contest_project/demo_assets/demo_aes_32b.bin.aes.bin`
+  - expected reference:
+    - `contest_project/demo_assets/expected_aes_32b.bin`
 
 Observed result:
-- the GUI completed the file-encryption run
-- the output file length remained `32B`
-- the generated ciphertext matched the expected reference exactly
+- the GUI completed both file-encryption runs
+- both output files remained `32B`
+- both generated ciphertext files matched their expected references exactly
 
 ## 6. Current Implementation Numbers
 
