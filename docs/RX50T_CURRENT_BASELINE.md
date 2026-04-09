@@ -256,6 +256,22 @@ Representative real-board results:
   - input: `55 01 3F`
   - output: `53 05 01 02 02 01 0A`
 
+### GUI File-Encryption Walkthrough
+
+Verified on the real board through the Tkinter GUI path:
+- algorithm: `SM4`
+- input file:
+  - `contest_project/demo_assets/demo_sm4_32b.bin`
+- output file:
+  - `contest_project/demo_assets/demo_sm4_32b.bin.sm4.bin`
+- expected reference:
+  - `contest_project/demo_assets/expected_sm4_32b.bin`
+
+Observed result:
+- the GUI completed the file-encryption run
+- the output file length remained `32B`
+- the generated ciphertext matched the expected reference exactly
+
 ## 6. Current Implementation Numbers
 
 `rx50t_uart_crypto_probe_board_top` implementation results:

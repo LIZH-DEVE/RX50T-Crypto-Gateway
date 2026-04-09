@@ -135,6 +135,17 @@ GUI real-board walkthrough verified:
 - `AES 32B`: pass
 - final GUI stats: `53 05 01 02 02 00 0A`
 
+GUI file-encryption walkthrough verified:
+- `SM4` file demo through the Tkinter GUI: pass
+- input sample:
+  - `contest_project/demo_assets/demo_sm4_32b.bin`
+- generated output:
+  - `contest_project/demo_assets/demo_sm4_32b.bin.sm4.bin`
+- expected reference:
+  - `contest_project/demo_assets/expected_sm4_32b.bin`
+- result:
+  - generated file matched the expected ciphertext exactly
+
 ## Relation to the Original Project
 
 This repository is the trimmed `RX50T` pure-`PL` contest branch extracted from a much larger original project.

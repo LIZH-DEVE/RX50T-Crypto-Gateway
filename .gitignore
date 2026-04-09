@@ -42,3 +42,6 @@ contest_project/*.pb
 .tmp_sim_*/
 .tmp_*.tcl
 
+# Demo output artifacts
+contest_project/demo_assets/*.sm4.bin
+contest_project/demo_assets/*.aes.bin
