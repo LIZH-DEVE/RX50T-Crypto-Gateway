@@ -4,7 +4,7 @@
 
 The current validated mainline is:
 
-`UART -> Parser -> 8-rule BRAM-backed ACL -> AES/SM4 (16B/32B) -> UART + Stats Query`
+`UART -> Parser -> 8-rule BRAM-backed ACL -> AES/SM4 (16B/32B) -> UART + Stats Query + Rule-Stats Query`
 
 This repository intentionally does not depend on:
 - `ARM/PS`
@@ -21,7 +21,7 @@ The current system direction is:
 - board-side pure `PL` datapath
 - PC-side GUI as the instrument panel for demo, monitoring, and batch testing
 - the GUI exposes the compiled ACL rule table carried by the current bitstream
-- the GUI also tracks session-level ACL hit counts and highlights the current hot rule
+- the GUI can query board-side per-rule ACL counters and highlight the current hot rule
 
 The GUI MVP has already completed its first real-board walkthrough against the live `RX50T` board.
 
@@ -37,12 +37,22 @@ Implemented:
 - protocol error fallback `E\n`
 - ACL block fallback `D\n`
 - stats query command `55 01 3F`
+- per-rule ACL counter query command `55 01 48`
 - five `8-bit` counters:
   - `total`
   - `acl`
   - `aes`
   - `sm4`
   - `err`
+- eight `8-bit` board-side ACL rule counters:
+  - `X`
+  - `Y`
+  - `Z`
+  - `W`
+  - `P`
+  - `R`
+  - `T`
+  - `U`
 
 Board baseline:
 - board: `RX50T`
@@ -90,7 +100,7 @@ Board baseline:
 - `UART -> Parser -> ACL -> SM4 -> UART`
 - `UART -> Parser -> ACL -> AES/SM4 -> UART`
 - `UART -> Parser -> 4-rule ACL -> AES/SM4 -> UART + Stats Query`
-- `UART -> Parser -> 8-rule BRAM-backed ACL -> AES/SM4 (16B/32B) -> UART + Stats Query`
+- `UART -> Parser -> 8-rule BRAM-backed ACL -> AES/SM4 (16B/32B) -> UART + Stats Query + Rule-Stats Query`
 
 ## Explicitly Out of Scope
 
@@ -107,6 +117,7 @@ Program the current `P1 Phase 2` bitstream, then run:
 
 ```powershell
 py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --query-stats --expect-stats 0,0,0,0,0
+py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --query-rule-stats --expect-rule-stats 0,0,0,0,0,0,0,0
 py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --block-ascii XYZ
 py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --sm4-known-vector
 py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --aes-known-vector
@@ -135,6 +146,19 @@ Fresh BRAM-backed ACL smoke test:
 - ACL block: `XYZ -> 44 0A`
 - final stats query: `53 02 01 00 01 00 0A`
 
+Board-side rule-counter query:
+- persistent-session real-board check with a short host-side settle between blocked frames:
+  - before:
+    - `X=1, P=0`
+  - `XYZ -> 44 0A`
+  - `PQR -> 44 0A`
+  - after:
+    - `X=2, P=1`
+  - observed delta:
+    - `X:+1`
+    - `P:+1`
+- the GUI now applies a short delayed auto-refresh after ACL block events so the board-side rule counters are read back after this settle window
+
 Expanded rule-table smoke test:
 - before `XYZ`: `53 00 00 00 00 00 0A`
 - `XYZ -> 44 0A`
@@ -156,12 +180,14 @@ Real-board verified:
 GUI real-board walkthrough verified:
 - connect `COM12`
 - `Query Stats`: pass
+- `Query Rule Hits`: pass
 - `SM4 16B`: pass
 - `AES 16B`: pass
 - `ACL Block (XYZ)`: pass
 - `SM4 32B`: pass
 - `AES 32B`: pass
 - final GUI stats: `53 05 01 02 02 00 0A`
+- GUI rule-hit panel now refreshes from board-side ACL counters
 
 GUI file-encryption walkthrough verified:
 - `SM4` file demo through the Tkinter GUI: pass

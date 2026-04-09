@@ -136,6 +136,7 @@ class GatewayWorker:
             duration_s=result.duration_s,
             throughput_mbps=result.throughput_mbps,
             stats=result.stats,
+            rule_stats=result.rule_stats,
             description=case.description,
         )
 

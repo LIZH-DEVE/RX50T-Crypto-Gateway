@@ -9,11 +9,13 @@ except ImportError as exc:  # pragma: no cover
     ) from exc
 
 from crypto_gateway_protocol import (
+    AclRuleCounters,
     StatsCounters,
     case_aes_known_vector,
     case_aes_two_block_vector,
     case_block_ascii,
     case_invalid_selector,
+    case_query_rule_stats,
     case_query_stats,
     case_sm4_known_vector,
     case_sm4_two_block_vector,
@@ -61,8 +63,17 @@ def main() -> int:
         help="Query the 8-bit counters and expect S total acl aes sm4 err newline",
     )
     parser.add_argument(
+        "--query-rule-stats",
+        action="store_true",
+        help="Query the per-rule ACL counters and expect H x y z w p r t u newline",
+    )
+    parser.add_argument(
         "--expect-stats",
         help="Expected counters as total,acl,aes,sm4,err for --query-stats, e.g. 3,1,1,1,1",
+    )
+    parser.add_argument(
+        "--expect-rule-stats",
+        help="Expected rule counters as x,y,z,w,p,r,t,u for --query-rule-stats",
     )
     parser.add_argument("--timeout", type=float, default=3.0, help="Read timeout in seconds")
     args = parser.parse_args()
@@ -77,6 +88,7 @@ def main() -> int:
             args.block_ascii is not None,
             args.invalid_selector,
             args.query_stats,
+            args.query_rule_stats,
         )
         if flag
     )
@@ -84,7 +96,7 @@ def main() -> int:
         raise SystemExit(
             "Choose exactly one of --sm4-known-vector, --aes-known-vector, "
             "--sm4-two-block-vector, --aes-two-block-vector, --block-ascii, "
-            "--invalid-selector, or --query-stats"
+            "--invalid-selector, --query-stats, or --query-rule-stats"
         )
 
     if args.sm4_known_vector:
@@ -110,12 +122,27 @@ def main() -> int:
                     raise SystemExit("--expect-stats values must be between 0 and 255")
             expected_stats = StatsCounters(*parts)
         case = case_query_stats(expected_stats)
+    elif args.query_rule_stats:
+        expected_rule_stats = None
+        if args.expect_rule_stats:
+            parts = [int(part, 0) for part in args.expect_rule_stats.split(",")]
+            if len(parts) != 8:
+                raise SystemExit(
+                    "--expect-rule-stats requires 8 comma-separated values: x,y,z,w,p,r,t,u"
+                )
+            for value in parts:
+                if not 0 <= value <= 255:
+                    raise SystemExit("--expect-rule-stats values must be between 0 and 255")
+            expected_rule_stats = AclRuleCounters(*parts)
+        case = case_query_rule_stats(expected_rule_stats)
     else:
         case = case_block_ascii(args.block_ascii)
 
     print(f"[TX] {format_hex(case.tx)}")
-    if case.expected is None:
+    if args.query_stats and case.expected is None:
         print("[EXPECT] stats response with 5 counters")
+    elif args.query_rule_stats and case.expected is None:
+        print("[EXPECT] rule stats response with 8 counters")
     else:
         print(f"[EXPECT] {format_hex(case.expected)}")
 
@@ -130,6 +157,20 @@ def main() -> int:
                 f"aes={result.stats.aes} sm4={result.stats.sm4} err={result.stats.err}"
             )
             print("[PASS] stats query response matched format.")
+            return 0
+    elif args.query_rule_stats and case.expected is None:
+        if result.rule_stats is not None:
+            counts = result.rule_stats.as_dict()
+            print(
+                "[RULES] "
+                + " ".join(f"{key}={counts[key]}" for key in ("X", "Y", "Z", "W", "P", "R", "T", "U"))
+            )
+            hot_rule, hot_hits = result.rule_stats.hot_rule()
+            if hot_rule is None:
+                print("[HOT] none")
+            else:
+                print(f"[HOT] {hot_rule}={hot_hits}")
+            print("[PASS] rule stats query response matched format.")
             return 0
     elif result.passed:
         print("[PASS] crypto probe response matched.")

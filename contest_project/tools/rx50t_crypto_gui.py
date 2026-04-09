@@ -7,12 +7,14 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from crypto_gateway_protocol import (
+    AclRuleCounters,
     DEFAULT_ACL_RULES,
     StatsCounters,
     case_aes_known_vector,
     case_aes_two_block_vector,
     case_block_ascii,
     case_invalid_selector,
+    case_query_rule_stats,
     case_query_stats,
     case_sm4_known_vector,
     case_sm4_two_block_vector,
@@ -41,7 +43,8 @@ class CryptoGatewayApp(tk.Tk):
         self.throughput_label = tk.StringVar(value="0.000 Mbps")
         self.last_latency_label = tk.StringVar(value="-")
         self.banner_text = tk.StringVar(value="Ready. Connect the board and query stats.")
-        self.hot_rule_text = tk.StringVar(value="Hot Rule: none yet")
+        self.hot_rule_text = tk.StringVar(value="Hot Rule (board): none yet")
+        self.rule_refresh_job: str | None = None
         self.stats_vars = {
             "total": tk.StringVar(value="0"),
             "acl": tk.StringVar(value="0"),
@@ -92,29 +95,30 @@ class CryptoGatewayApp(tk.Tk):
 
         actions = ttk.LabelFrame(self, text="Quick Actions", padding=12)
         actions.grid(row=1, column=0, padx=12, sticky="ew")
-        for idx in range(4):
+        for idx in range(5):
             actions.columnconfigure(idx, weight=1)
 
         ttk.Button(actions, text="Query Stats", command=lambda: self._submit_case(case_query_stats())).grid(row=0, column=0, sticky="ew", padx=4, pady=4)
-        ttk.Button(actions, text="SM4 16B", command=lambda: self._submit_case(case_sm4_known_vector())).grid(row=0, column=1, sticky="ew", padx=4, pady=4)
-        ttk.Button(actions, text="AES 16B", command=lambda: self._submit_case(case_aes_known_vector())).grid(row=0, column=2, sticky="ew", padx=4, pady=4)
-        ttk.Button(actions, text="Invalid Selector", command=lambda: self._submit_case(case_invalid_selector())).grid(row=0, column=3, sticky="ew", padx=4, pady=4)
+        ttk.Button(actions, text="Query Rule Hits", command=lambda: self._submit_case(case_query_rule_stats())).grid(row=0, column=1, sticky="ew", padx=4, pady=4)
+        ttk.Button(actions, text="SM4 16B", command=lambda: self._submit_case(case_sm4_known_vector())).grid(row=0, column=2, sticky="ew", padx=4, pady=4)
+        ttk.Button(actions, text="AES 16B", command=lambda: self._submit_case(case_aes_known_vector())).grid(row=0, column=3, sticky="ew", padx=4, pady=4)
+        ttk.Button(actions, text="Invalid Selector", command=lambda: self._submit_case(case_invalid_selector())).grid(row=0, column=4, sticky="ew", padx=4, pady=4)
 
         ttk.Button(actions, text="SM4 32B", command=lambda: self._submit_case(case_sm4_two_block_vector())).grid(row=1, column=0, sticky="ew", padx=4, pady=4)
         ttk.Button(actions, text="AES 32B", command=lambda: self._submit_case(case_aes_two_block_vector())).grid(row=1, column=1, sticky="ew", padx=4, pady=4)
 
         acl_frame = ttk.Frame(actions)
-        acl_frame.grid(row=1, column=2, columnspan=2, sticky="ew", padx=4, pady=4)
+        acl_frame.grid(row=1, column=2, columnspan=3, sticky="ew", padx=4, pady=4)
         acl_frame.columnconfigure(1, weight=1)
         ttk.Label(acl_frame, text="ACL Probe").grid(row=0, column=0, padx=(0, 8))
         ttk.Entry(acl_frame, textvariable=self.acl_text, width=14).grid(row=0, column=1, padx=(0, 8), sticky="ew")
         ttk.Button(acl_frame, text="Send Block Test", command=self._send_acl_probe).grid(row=0, column=2)
 
-        acl_rules = ttk.LabelFrame(actions, text="Compiled ACL Rule Table (BRAM)", padding=10)
-        acl_rules.grid(row=2, column=0, columnspan=4, sticky="ew", padx=4, pady=(8, 0))
+        acl_rules = ttk.LabelFrame(actions, text="Compiled ACL Rule Table (BRAM + Hardware Counters)", padding=10)
+        acl_rules.grid(row=2, column=0, columnspan=5, sticky="ew", padx=4, pady=(8, 0))
         ttk.Label(
             acl_rules,
-            text="Current bitstream default blocked first-byte keys:",
+            text="Current bitstream default blocked first-byte keys. Use 'Query Rule Hits' to refresh board counters:",
         ).grid(row=0, column=0, columnspan=len(DEFAULT_ACL_RULES), sticky="w", pady=(0, 6))
         ttk.Label(
             acl_rules,
@@ -276,6 +280,16 @@ class CryptoGatewayApp(tk.Tk):
         self.worker.encrypt_file(path, self.file_algo.get())
         self._append_log(f"Queued file encryption: {Path(path).name} with {self.file_algo.get()}")
 
+    def _schedule_rule_stats_refresh(self) -> None:
+        if self.rule_refresh_job is not None:
+            self.after_cancel(self.rule_refresh_job)
+        self.rule_refresh_job = self.after(180, self._run_rule_stats_refresh)
+
+    def _run_rule_stats_refresh(self) -> None:
+        self.rule_refresh_job = None
+        self.worker.submit_case(case_query_rule_stats())
+        self._append_log("Queued: Query Rule Hits (auto-refresh)")
+
     def _draw_chart(self) -> None:
         self.chart.delete("all")
         width = int(self.chart.winfo_width() or 900)
@@ -320,25 +334,20 @@ class CryptoGatewayApp(tk.Tk):
             bg, fg = palette[key]
             label.configure(bg=bg, fg=fg)
 
-    def _record_acl_rule_hit(self, tx: bytes) -> None:
-        key = extract_first_payload_key(tx)
-        if not key or key not in self.acl_rule_hit_vars:
-            return
-        current = int(self.acl_rule_hit_vars[key].get())
-        updated = current + 1
-        self.acl_rule_hit_vars[key].set(str(updated))
+    def _apply_rule_stats(self, rule_stats: AclRuleCounters) -> None:
+        counts = rule_stats.as_dict()
         for rule, label in self.acl_rule_hit_labels.items():
-            hits = int(self.acl_rule_hit_vars[rule].get())
+            hits = counts[rule]
+            self.acl_rule_hit_vars[rule].set(str(hits))
             if hits > 0:
                 label.configure(bg="#fee2e2", fg="#991b1b")
             else:
                 label.configure(bg="#e2e8f0", fg="#0f172a")
-        hot_rule = max(DEFAULT_ACL_RULES, key=lambda item: int(self.acl_rule_hit_vars[item].get()))
-        hot_hits = int(self.acl_rule_hit_vars[hot_rule].get())
-        if hot_hits > 0:
-            self.hot_rule_text.set(f"Hot Rule: {hot_rule} ({hot_hits} hits)")
+        hot_rule, hot_hits = rule_stats.hot_rule()
+        if hot_rule is not None:
+            self.hot_rule_text.set(f"Hot Rule (board): {hot_rule} ({hot_hits} hits)")
         else:
-            self.hot_rule_text.set("Hot Rule: none yet")
+            self.hot_rule_text.set("Hot Rule (board): none yet")
 
     def _handle_event(self, event: WorkerEvent) -> None:
         kind = event.kind
@@ -364,17 +373,34 @@ class CryptoGatewayApp(tk.Tk):
             self._update_throughput(float(payload["throughput_mbps"]), float(payload["duration_s"]))
             if payload["stats"] is not None:
                 self._apply_stats(payload["stats"])
+            if payload["rule_stats"] is not None:
+                self._apply_rule_stats(payload["rule_stats"])
             if rx == b"D\n":
-                self._record_acl_rule_hit(tx)
                 self._append_log(f"ACL BLOCK: {description} -> {format_hex(rx)}", "block")
                 rule = extract_first_payload_key(tx)
                 if rule:
                     self._set_banner(f"Hardware firewall blocked the frame (ACL hit: {rule}).", "block")
                 else:
                     self._set_banner("Hardware firewall blocked the frame (ACL hit).", "block")
+                self._schedule_rule_stats_refresh()
             elif rx == b"E\n":
                 self._append_log(f"PROTOCOL ERROR: {description} -> {format_hex(rx)}", "error")
                 self._set_banner("Protocol error returned by the board.", "error")
+            elif payload["rule_stats"] is not None:
+                counters = payload["rule_stats"].as_dict()
+                self._append_log(
+                    "ACL RULE STATS: "
+                    + " ".join(f"{key}={counters[key]}" for key in DEFAULT_ACL_RULES),
+                    "pass" if passed else "error",
+                )
+                hot_rule, hot_hits = payload["rule_stats"].hot_rule()
+                if hot_rule is None:
+                    self._set_banner("Board-side ACL rule counters refreshed (no hits yet).", "pass")
+                else:
+                    self._set_banner(
+                        f"Board-side ACL rule counters refreshed. Hot rule: {hot_rule} ({hot_hits} hits).",
+                        "pass",
+                    )
             else:
                 self._append_log(
                     f"{payload['name']}: TX={format_hex(tx)} RX={format_hex(rx)} "
@@ -420,6 +446,9 @@ class CryptoGatewayApp(tk.Tk):
         self.after(100, self._poll_worker)
 
     def _on_close(self) -> None:
+        if self.rule_refresh_job is not None:
+            self.after_cancel(self.rule_refresh_job)
+            self.rule_refresh_job = None
         self.worker.stop()
         self.destroy()
 

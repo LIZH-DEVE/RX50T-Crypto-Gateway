@@ -11,6 +11,7 @@ module contest_uart_crypto_probe #(
 );
 
     localparam [7:0] ASCII_ERROR = 8'h45; // E
+    localparam [7:0] ASCII_RULE  = 8'h48; // H
     localparam [7:0] ASCII_NL    = 8'h0A;
     localparam [7:0] ASCII_STAT  = 8'h53; // S
     localparam [7:0] ASCII_QUERY = 8'h3F; // ?
@@ -34,9 +35,11 @@ module contest_uart_crypto_probe #(
     reg        frame_selector_seen_q;
     reg        frame_proto_error_q;
     reg        frame_query_q;
+    reg        frame_rule_query_q;
     reg        frame_algo_sel_q;
     reg        pending_data_stats_q;
     reg        pending_data_algo_q;
+    reg  [7:0] pending_frame_key_q;
     reg        acl_block_seen_q;
 
     reg        acl_in_valid_q;
@@ -58,12 +61,22 @@ module contest_uart_crypto_probe #(
     reg        pending_error_nl_q;
     reg        pending_stats_q;
     reg  [2:0] pending_stats_idx_q;
+    reg        pending_rule_stats_q;
+    reg  [3:0] pending_rule_stats_idx_q;
 
     reg  [7:0] stat_total_frames_q;
     reg  [7:0] stat_acl_blocks_q;
     reg  [7:0] stat_aes_frames_q;
     reg  [7:0] stat_sm4_frames_q;
     reg  [7:0] stat_error_frames_q;
+    reg  [7:0] stat_rule_x_q;
+    reg  [7:0] stat_rule_y_q;
+    reg  [7:0] stat_rule_z_q;
+    reg  [7:0] stat_rule_w_q;
+    reg  [7:0] stat_rule_p_q;
+    reg  [7:0] stat_rule_r_q;
+    reg  [7:0] stat_rule_t_q;
+    reg  [7:0] stat_rule_u_q;
 
     wire       bridge_valid;
     wire [7:0] bridge_data;
@@ -81,6 +94,24 @@ module contest_uart_crypto_probe #(
                 3'd5: stats_byte = stat_error_frames_q;
                 3'd6: stats_byte = ASCII_NL;
                 default: stats_byte = 8'h00;
+            endcase
+        end
+    endfunction
+
+    function automatic [7:0] rule_stats_byte(input [3:0] idx);
+        begin
+            case (idx)
+                4'd0: rule_stats_byte = ASCII_RULE;
+                4'd1: rule_stats_byte = stat_rule_x_q;
+                4'd2: rule_stats_byte = stat_rule_y_q;
+                4'd3: rule_stats_byte = stat_rule_z_q;
+                4'd4: rule_stats_byte = stat_rule_w_q;
+                4'd5: rule_stats_byte = stat_rule_p_q;
+                4'd6: rule_stats_byte = stat_rule_r_q;
+                4'd7: rule_stats_byte = stat_rule_t_q;
+                4'd8: rule_stats_byte = stat_rule_u_q;
+                4'd9: rule_stats_byte = ASCII_NL;
+                default: rule_stats_byte = 8'h00;
             endcase
         end
     endfunction
@@ -173,9 +204,11 @@ module contest_uart_crypto_probe #(
             frame_selector_seen_q <= 1'b0;
             frame_proto_error_q   <= 1'b0;
             frame_query_q         <= 1'b0;
+            frame_rule_query_q    <= 1'b0;
             frame_algo_sel_q      <= ALG_SM4;
             pending_data_stats_q  <= 1'b0;
             pending_data_algo_q   <= ALG_SM4;
+            pending_frame_key_q   <= 8'd0;
             acl_block_seen_q      <= 1'b0;
             acl_in_valid_q        <= 1'b0;
             acl_in_data_q         <= 8'd0;
@@ -187,11 +220,21 @@ module contest_uart_crypto_probe #(
             pending_error_nl_q    <= 1'b0;
             pending_stats_q       <= 1'b0;
             pending_stats_idx_q   <= 3'd0;
+            pending_rule_stats_q  <= 1'b0;
+            pending_rule_stats_idx_q <= 4'd0;
             stat_total_frames_q   <= 8'd0;
             stat_acl_blocks_q     <= 8'd0;
             stat_aes_frames_q     <= 8'd0;
             stat_sm4_frames_q     <= 8'd0;
             stat_error_frames_q   <= 8'd0;
+            stat_rule_x_q         <= 8'd0;
+            stat_rule_y_q         <= 8'd0;
+            stat_rule_z_q         <= 8'd0;
+            stat_rule_w_q         <= 8'd0;
+            stat_rule_p_q         <= 8'd0;
+            stat_rule_r_q         <= 8'd0;
+            stat_rule_t_q         <= 8'd0;
+            stat_rule_u_q         <= 8'd0;
         end else begin
             acl_in_valid_q    <= 1'b0;
             acl_in_data_q     <= 8'd0;
@@ -207,6 +250,7 @@ module contest_uart_crypto_probe #(
                 frame_selector_seen_q <= 1'b0;
                 frame_proto_error_q   <= 1'b0;
                 frame_query_q         <= 1'b0;
+                frame_rule_query_q    <= 1'b0;
                 frame_algo_sel_q      <= ALG_SM4;
             end
 
@@ -215,6 +259,8 @@ module contest_uart_crypto_probe #(
                     frame_selector_seen_q <= 1'b1;
                     if (parser_payload_len == 8'd1 && parser_payload_byte == ASCII_QUERY) begin
                         frame_query_q <= 1'b1;
+                    end else if (parser_payload_len == 8'd1 && parser_payload_byte == ASCII_RULE) begin
+                        frame_rule_query_q <= 1'b1;
                     end else if ((parser_payload_len == 8'd17) || (parser_payload_len == 8'd33)) begin
                         if (parser_payload_byte == MODE_AES) begin
                             frame_algo_sel_q <= ALG_AES;
@@ -252,17 +298,24 @@ module contest_uart_crypto_probe #(
                     frame_query_q) begin
                     pending_stats_q     <= 1'b1;
                     pending_stats_idx_q <= 3'd0;
+                end else if ((parser_payload_valid && !frame_selector_seen_q &&
+                              (parser_payload_len == 8'd1) && (parser_payload_byte == ASCII_RULE)) ||
+                             frame_rule_query_q) begin
+                    pending_rule_stats_q     <= 1'b1;
+                    pending_rule_stats_idx_q <= 4'd0;
                 end else if (frame_proto_error_q) begin
                     pending_error_q <= 1'b1;
                     stat_error_frames_q <= stat_error_frames_q + 8'd1;
                 end else begin
                     pending_data_stats_q <= 1'b1;
                     pending_data_algo_q  <= frame_algo_sel_q;
+                    pending_frame_key_q  <= frame_key_q;
                 end
                 frame_key_valid_q     <= 1'b0;
                 frame_selector_seen_q <= 1'b0;
                 frame_proto_error_q   <= 1'b0;
                 frame_query_q         <= 1'b0;
+                frame_rule_query_q    <= 1'b0;
             end
 
             if (acl_valid && (acl_data == 8'h44) && !acl_last) begin
@@ -273,12 +326,25 @@ module contest_uart_crypto_probe #(
                 stat_total_frames_q  <= stat_total_frames_q + 8'd1;
                 if (acl_block_seen_q) begin
                     stat_acl_blocks_q <= stat_acl_blocks_q + 8'd1;
+                    case (pending_frame_key_q)
+                        8'h58: stat_rule_x_q <= stat_rule_x_q + 8'd1;
+                        8'h59: stat_rule_y_q <= stat_rule_y_q + 8'd1;
+                        8'h5A: stat_rule_z_q <= stat_rule_z_q + 8'd1;
+                        8'h57: stat_rule_w_q <= stat_rule_w_q + 8'd1;
+                        8'h50: stat_rule_p_q <= stat_rule_p_q + 8'd1;
+                        8'h52: stat_rule_r_q <= stat_rule_r_q + 8'd1;
+                        8'h54: stat_rule_t_q <= stat_rule_t_q + 8'd1;
+                        8'h55: stat_rule_u_q <= stat_rule_u_q + 8'd1;
+                        default: begin
+                        end
+                    endcase
                 end else if (pending_data_algo_q == ALG_AES) begin
                     stat_aes_frames_q <= stat_aes_frames_q + 8'd1;
                 end else begin
                     stat_sm4_frames_q <= stat_sm4_frames_q + 8'd1;
                 end
                 pending_data_stats_q <= 1'b0;
+                pending_frame_key_q  <= 8'd0;
                 acl_block_seen_q     <= 1'b0;
             end
 
@@ -293,6 +359,16 @@ module contest_uart_crypto_probe #(
                 bridge_in_data_q   <= ASCII_NL;
                 bridge_in_last_q   <= 1'b1;
                 pending_error_nl_q <= 1'b0;
+            end else if (pending_rule_stats_q) begin
+                bridge_in_valid_q <= 1'b1;
+                bridge_in_data_q  <= rule_stats_byte(pending_rule_stats_idx_q);
+                bridge_in_last_q  <= (pending_rule_stats_idx_q == 4'd9);
+                if (pending_rule_stats_idx_q == 4'd9) begin
+                    pending_rule_stats_q     <= 1'b0;
+                    pending_rule_stats_idx_q <= 4'd0;
+                end else begin
+                    pending_rule_stats_idx_q <= pending_rule_stats_idx_q + 4'd1;
+                end
             end else if (pending_stats_q) begin
                 bridge_in_valid_q <= 1'b1;
                 bridge_in_data_q  <= stats_byte(pending_stats_idx_q);

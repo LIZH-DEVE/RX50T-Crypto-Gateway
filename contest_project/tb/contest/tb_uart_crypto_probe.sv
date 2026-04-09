@@ -264,6 +264,29 @@ module tb_uart_crypto_probe;
             begin
                 uart_send_byte(8'h55);
                 uart_send_byte(8'd1);
+                uart_send_byte(8'h48);
+            end
+            begin
+                uart_expect_byte(8'h48);
+                uart_expect_byte(8'h01);
+                uart_expect_byte(8'h00);
+                uart_expect_byte(8'h00);
+                uart_expect_byte(8'h00);
+                uart_expect_byte(8'h01);
+                uart_expect_byte(8'h00);
+                uart_expect_byte(8'h00);
+                uart_expect_byte(8'h00);
+                uart_expect_byte(8'h0A);
+            end
+        join
+
+        #(20 * BIT_PERIODNS);
+
+        // Query aggregate counters -> S total acl aes sm4 err \n
+        fork
+            begin
+                uart_send_byte(8'h55);
+                uart_send_byte(8'd1);
                 uart_send_byte(8'h3F);
             end
             begin

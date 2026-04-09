@@ -35,6 +35,30 @@ class StatsCounters:
 
 
 @dataclass(frozen=True)
+class AclRuleCounters:
+    x: int
+    y: int
+    z: int
+    w: int
+    p: int
+    r: int
+    t: int
+    u: int
+
+    def as_bytes(self) -> bytes:
+        return bytes([0x48, self.x, self.y, self.z, self.w, self.p, self.r, self.t, self.u, 0x0A])
+
+    def as_dict(self) -> dict[str, int]:
+        return dict(zip(DEFAULT_ACL_RULES, (self.x, self.y, self.z, self.w, self.p, self.r, self.t, self.u)))
+
+    def hot_rule(self) -> tuple[str | None, int]:
+        counts = self.as_dict()
+        rule = max(DEFAULT_ACL_RULES, key=lambda item: counts[item])
+        hits = counts[rule]
+        return (rule if hits > 0 else None, hits)
+
+
+@dataclass(frozen=True)
 class ProbeCase:
     name: str
     tx: bytes
@@ -51,6 +75,7 @@ class ProbeResult:
     passed: bool
     duration_s: float
     stats: StatsCounters | None = None
+    rule_stats: AclRuleCounters | None = None
 
     @property
     def tx(self) -> bytes:
@@ -96,6 +121,12 @@ def parse_stats_response(raw: bytes) -> StatsCounters:
     if len(raw) != 7 or raw[:1] != b"S" or raw[-1:] != b"\n":
         raise ValueError(f"invalid stats response: {format_hex(raw)}")
     return StatsCounters(raw[1], raw[2], raw[3], raw[4], raw[5])
+
+
+def parse_rule_stats_response(raw: bytes) -> AclRuleCounters:
+    if len(raw) != 10 or raw[:1] != b"H" or raw[-1:] != b"\n":
+        raise ValueError(f"invalid rule stats response: {format_hex(raw)}")
+    return AclRuleCounters(raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7], raw[8])
 
 
 def read_exact(ser: serial.Serial, expected_len: int, timeout_s: float) -> bytes:
@@ -195,6 +226,17 @@ def case_query_stats(expected: StatsCounters | None = None) -> ProbeCase:
     )
 
 
+def case_query_rule_stats(expected: AclRuleCounters | None = None) -> ProbeCase:
+    return ProbeCase(
+        name="Query Rule Hits",
+        tx=build_frame(b"H"),
+        response_len=10,
+        expected=expected.as_bytes() if expected else None,
+        description="Per-rule ACL counter readback",
+        kind="rule_stats",
+    )
+
+
 def case_encrypt_block(algo: str, plaintext: bytes) -> ProbeCase:
     normalized = algo.strip().upper()
     if normalized not in {"AES", "SM4"}:
@@ -228,6 +270,7 @@ def run_case_on_serial(
     duration_s = max(time.perf_counter() - started, 1e-9)
 
     stats = None
+    rule_stats = None
     passed = False
     if case.kind == "stats":
         try:
@@ -235,7 +278,20 @@ def run_case_on_serial(
             passed = case.expected is None or rx == case.expected
         except ValueError:
             passed = False
+    elif case.kind == "rule_stats":
+        try:
+            rule_stats = parse_rule_stats_response(rx)
+            passed = case.expected is None or rx == case.expected
+        except ValueError:
+            passed = False
     else:
         passed = case.expected is None or rx == case.expected
 
-    return ProbeResult(case=case, rx=rx, passed=passed, duration_s=duration_s, stats=stats)
+    return ProbeResult(
+        case=case,
+        rx=rx,
+        passed=passed,
+        duration_s=duration_s,
+        stats=stats,
+        rule_stats=rule_stats,
+    )

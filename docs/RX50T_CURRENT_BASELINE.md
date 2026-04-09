@@ -13,13 +13,15 @@ Design goals:
 
 The current validated mainline is:
 
-`UART -> Parser -> BRAM-backed ACL -> AES/SM4 -> UART`
+`UART -> Parser -> BRAM-backed ACL -> AES/SM4 -> UART + Stats Query + Rule-Stats Query`
 
 `P1` extends that path with:
 - a BRAM-backed ACL rule table
 - current default ACL entries: `8`
 - `5` `8-bit` status counters
+- `8` `8-bit` per-rule ACL hardware counters
 - stats query over UART
+- rule-stats query over UART
 - single-block and two-block encryption
 
 This mainline now has:
@@ -213,6 +215,21 @@ Purpose:
 - query frame: `55 01 3F`
 - response format: `53 total acl aes sm4 err 0A`
 
+### Rule-Stats Query Command
+
+- query frame: `55 01 48`
+- response format: `48 x y z w p r t u 0A`
+
+Returned rule order:
+- `X`
+- `Y`
+- `Z`
+- `W`
+- `P`
+- `R`
+- `T`
+- `U`
+
 ## 5. Verification Status
 
 ### Simulation
@@ -315,29 +332,32 @@ Current displayed blocked keys:
 This is a display-only reflection of the current shipped bitstream defaults.
 It is not yet a runtime rule-update interface.
 
-### GUI Session-Level ACL Hit Tracking
+### Board-Side ACL Rule Counters and GUI Hot Rule
 
-The GUI also keeps a session-local counter for ACL block events that it directly observes.
+The board now keeps per-rule ACL hit counters in hardware for the shipped default rule table.
+The GUI can query those counters and highlight the current hot rule.
 
 Current behavior:
-- each GUI-initiated blocked frame increments the matching first-byte key counter
-- blocked keys with non-zero hits are highlighted
-- the GUI surfaces a `Hot Rule` summary for the most frequently blocked key in the current session
+- the query command `55 01 48` returns `H x y z w p r t u \n`
+- the GUI `Query Rule Hits` action refreshes the on-board counters
+- blocked keys with non-zero hardware hits are highlighted
+- the GUI surfaces a `Hot Rule` summary for the most frequently blocked hardware rule
+- after an ACL block event, the GUI schedules a short delayed rule-counter refresh so the board-side values catch up cleanly before repainting
 
-This is a presentation-layer feature only.
-It does not modify the board bitstream or expose runtime ACL table writes.
+This remains a read-only presentation and observability feature.
+It does not expose runtime ACL table writes.
 
 ## 6. Current Implementation Numbers
 
 `rx50t_uart_crypto_probe_board_top` implementation results:
-- `WNS = 5.856ns`
-- `WHS = 0.014ns`
+- `WNS = 6.104ns`
+- `WHS = 0.094ns`
 - `DRC violations = 0`
-- `Slice LUTs = 4342`
-- `Slice Registers = 4970`
-- `Slice = 1676`
+- `Slice LUTs = 4445`
+- `Slice Registers = 5048`
+- `Slice = 1856`
 - `Bonded IOB = 4`
-- `RAMB18 = 0.5`
+- `RAMB18 = 1`
 - `DSPs = 0`
 
 ## 7. Fresh Expanded ACL Smoke Test
@@ -358,7 +378,25 @@ Observed on `COM12` with short host-side spacing between frames:
 - after `PQR`:
   - `53 02 02 00 00 00 0A`
 
-## 8. Current Explicit Non-Goals
+## 8. Fresh Board-Side Rule-Counter Smoke Test
+
+In a persistent UART session on the live board, rule counters were verified by observing the delta before and after two blocked frames.
+
+Observed with a short host-side settle between blocked frames:
+
+- before:
+  - `X=1, P=0`
+- `XYZ -> 44 0A`
+- `PQR -> 44 0A`
+- after:
+  - `X=2, P=1`
+- observed delta:
+  - `X:+1`
+  - `P:+1`
+
+This is why the GUI now schedules a short delayed rule-counter refresh after ACL block events instead of querying the hardware counters immediately.
+
+## 9. Current Explicit Non-Goals
 
 Not part of the current baseline:
 - dynamic key download
@@ -369,7 +407,7 @@ Not part of the current baseline:
 - full `Ethernet/IP/UDP` stack
 - zero-copy fast path
 
-## 9. One-Line Summary
+## 10. One-Line Summary
 
 The current `RX50T` version is now a real pure-`PL` security datapath with verified evidence for:
 
@@ -380,4 +418,5 @@ and it already supports:
 - AES/SM4 mode switching
 - `16B / 32B` continuous encryption
 - protocol error fallback
-- stats query and counter readback
+- aggregate stats query and counter readback
+- board-side per-rule ACL counter readback

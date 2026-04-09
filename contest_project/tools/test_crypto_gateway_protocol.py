@@ -1,12 +1,15 @@
 import unittest
 
 from crypto_gateway_protocol import (
+    AclRuleCounters,
     StatsCounters,
     build_frame,
     case_aes_known_vector,
     case_block_ascii,
+    case_query_rule_stats,
     case_query_stats,
     extract_first_payload_key,
+    parse_rule_stats_response,
     parse_stats_response,
     split_blocks_for_transport,
 )
@@ -28,6 +31,20 @@ class CryptoGatewayProtocolTests(unittest.TestCase):
         case = case_query_stats(StatsCounters(5, 1, 2, 2, 1))
         self.assertEqual(case.expected, bytes([0x53, 0x05, 0x01, 0x02, 0x02, 0x01, 0x0A]))
         self.assertEqual(case.response_len, 7)
+
+    def test_parse_rule_stats_response(self) -> None:
+        counters = parse_rule_stats_response(
+            bytes([0x48, 0x02, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x0A])
+        )
+        self.assertEqual(counters, AclRuleCounters(2, 1, 1, 1, 1, 1, 1, 1))
+
+    def test_query_rule_stats_case_uses_expected_bytes_when_provided(self) -> None:
+        case = case_query_rule_stats(AclRuleCounters(1, 0, 0, 0, 1, 0, 0, 0))
+        self.assertEqual(
+            case.expected,
+            bytes([0x48, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x0A]),
+        )
+        self.assertEqual(case.response_len, 10)
 
     def test_split_blocks_prefers_32_then_16(self) -> None:
         payload = bytes(range(48))
