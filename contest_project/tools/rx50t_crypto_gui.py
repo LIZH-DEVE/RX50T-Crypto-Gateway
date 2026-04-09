@@ -38,6 +38,7 @@ class CryptoGatewayApp(tk.Tk):
         self.connection_state = tk.StringVar(value="Disconnected")
         self.throughput_label = tk.StringVar(value="0.000 Mbps")
         self.last_latency_label = tk.StringVar(value="-")
+        self.banner_text = tk.StringVar(value="Ready. Connect the board and query stats.")
         self.stats_vars = {
             "total": tk.StringVar(value="0"),
             "acl": tk.StringVar(value="0"),
@@ -45,6 +46,7 @@ class CryptoGatewayApp(tk.Tk):
             "sm4": tk.StringVar(value="0"),
             "err": tk.StringVar(value="0"),
         }
+        self.stat_value_labels: dict[str, tk.Label] = {}
 
         self._build_ui()
         self._refresh_ports()
@@ -71,6 +73,17 @@ class CryptoGatewayApp(tk.Tk):
         ttk.Button(top, text="Disconnect", command=self._disconnect).grid(row=1, column=4, padx=(0, 16))
         ttk.Label(top, text="Link").grid(row=0, column=5, sticky="w")
         ttk.Label(top, textvariable=self.connection_state).grid(row=1, column=5, sticky="w")
+        self.banner = tk.Label(
+            top,
+            textvariable=self.banner_text,
+            bg="#e2e8f0",
+            fg="#0f172a",
+            font=("Segoe UI", 10, "bold"),
+            anchor="w",
+            padx=10,
+            pady=8,
+        )
+        self.banner.grid(row=2, column=0, columnspan=7, sticky="ew", pady=(12, 0))
 
         actions = ttk.LabelFrame(self, text="Quick Actions", padding=12)
         actions.grid(row=1, column=0, padx=12, sticky="ew")
@@ -105,7 +118,20 @@ class CryptoGatewayApp(tk.Tk):
         stat_names = [("total", "Total"), ("acl", "ACL"), ("aes", "AES"), ("sm4", "SM4"), ("err", "Error")]
         for offset, (key, label) in enumerate(stat_names, start=2):
             ttk.Label(metrics, text=label).grid(row=0, column=offset, sticky="w")
-            ttk.Label(metrics, textvariable=self.stats_vars[key]).grid(row=1, column=offset, sticky="w")
+            stat_label = tk.Label(
+                metrics,
+                textvariable=self.stats_vars[key],
+                bg="#e2e8f0",
+                fg="#0f172a",
+                font=("Segoe UI", 12, "bold"),
+                width=6,
+                relief="ridge",
+                bd=1,
+                padx=8,
+                pady=4,
+            )
+            stat_label.grid(row=1, column=offset, sticky="w")
+            self.stat_value_labels[key] = stat_label
 
         chart_frame = ttk.LabelFrame(self, text="Throughput Waveform", padding=12)
         chart_frame.grid(row=3, column=0, padx=12, pady=8, sticky="nsew")
@@ -126,6 +152,11 @@ class CryptoGatewayApp(tk.Tk):
         log_frame.columnconfigure(0, weight=1)
         self.log_box = scrolledtext.ScrolledText(log_frame, wrap="word", font=("Consolas", 10))
         self.log_box.grid(row=0, column=0, sticky="nsew")
+        self.log_box.tag_config("info", foreground="#0f172a")
+        self.log_box.tag_config("pass", foreground="#166534")
+        self.log_box.tag_config("warn", foreground="#9a3412")
+        self.log_box.tag_config("block", foreground="#b91c1c", font=("Consolas", 10, "bold"))
+        self.log_box.tag_config("error", foreground="#991b1b", font=("Consolas", 10, "bold"))
 
         file_frame = ttk.LabelFrame(bottom, text="File Encryption Demo", padding=12)
         file_frame.grid(row=0, column=1, sticky="nsew")
@@ -145,9 +176,21 @@ class CryptoGatewayApp(tk.Tk):
     def _timestamp(self) -> str:
         return datetime.now().strftime("%H:%M:%S")
 
-    def _append_log(self, message: str) -> None:
-        self.log_box.insert("end", f"[{self._timestamp()}] {message}\n")
+    def _append_log(self, message: str, tag: str = "info") -> None:
+        self.log_box.insert("end", f"[{self._timestamp()}] {message}\n", tag)
         self.log_box.see("end")
+
+    def _set_banner(self, text: str, level: str = "info") -> None:
+        colors = {
+            "info": ("#e2e8f0", "#0f172a"),
+            "pass": ("#dcfce7", "#166534"),
+            "warn": ("#ffedd5", "#9a3412"),
+            "block": ("#fee2e2", "#b91c1c"),
+            "error": ("#fecaca", "#991b1b"),
+        }
+        bg, fg = colors.get(level, colors["info"])
+        self.banner.configure(bg=bg, fg=fg)
+        self.banner_text.set(text)
 
     def _refresh_ports(self) -> None:
         ports = self.worker.list_ports()
@@ -163,6 +206,7 @@ class CryptoGatewayApp(tk.Tk):
             return
         self.worker.connect(port, int(self.current_baud.get()))
         self._append_log(f"Connecting to {port} @ {self.current_baud.get()} baud...")
+        self._set_banner(f"Connecting to {port}...", "warn")
 
     def _disconnect(self) -> None:
         self.worker.disconnect()
@@ -170,6 +214,7 @@ class CryptoGatewayApp(tk.Tk):
     def _submit_case(self, case) -> None:
         self.worker.submit_case(case)
         self._append_log(f"Queued: {case.name}")
+        self._set_banner(f"Queued action: {case.name}", "info")
 
     def _send_acl_probe(self) -> None:
         text = self.acl_text.get().strip()
@@ -218,18 +263,31 @@ class CryptoGatewayApp(tk.Tk):
         self.stats_vars["aes"].set(str(stats.aes))
         self.stats_vars["sm4"].set(str(stats.sm4))
         self.stats_vars["err"].set(str(stats.err))
+        palette = {
+            "total": ("#dbeafe", "#1d4ed8"),
+            "acl": ("#fee2e2" if stats.acl else "#e2e8f0", "#b91c1c" if stats.acl else "#0f172a"),
+            "aes": ("#ede9fe" if stats.aes else "#e2e8f0", "#6d28d9" if stats.aes else "#0f172a"),
+            "sm4": ("#dcfce7" if stats.sm4 else "#e2e8f0", "#166534" if stats.sm4 else "#0f172a"),
+            "err": ("#fecaca" if stats.err else "#e2e8f0", "#991b1b" if stats.err else "#0f172a"),
+        }
+        for key, label in self.stat_value_labels.items():
+            bg, fg = palette[key]
+            label.configure(bg=bg, fg=fg)
 
     def _handle_event(self, event: WorkerEvent) -> None:
         kind = event.kind
         payload = event.payload
         if kind == "connected":
             self.connection_state.set(f"Connected: {payload['port']}")
-            self._append_log(f"Connected to {payload['port']} @ {payload['baud']} baud")
+            self._append_log(f"Connected to {payload['port']} @ {payload['baud']} baud", "pass")
+            self._set_banner(f"Connected to {payload['port']} @ {payload['baud']} baud", "pass")
         elif kind == "disconnected":
             self.connection_state.set("Disconnected")
-            self._append_log("Serial link disconnected")
+            self._append_log("Serial link disconnected", "warn")
+            self._set_banner("Disconnected. Reconnect to continue testing.", "warn")
         elif kind == "error":
-            self._append_log(f"ERROR: {payload['message']}")
+            self._append_log(f"ERROR: {payload['message']}", "error")
+            self._set_banner(f"Error: {payload['message']}", "error")
             messagebox.showerror("Gateway Error", payload["message"])
         elif kind == "result":
             tx = payload["tx"]
@@ -241,26 +299,44 @@ class CryptoGatewayApp(tk.Tk):
             if payload["stats"] is not None:
                 self._apply_stats(payload["stats"])
             if rx == b"D\n":
-                self._append_log(f"ACL BLOCK: {description} -> {format_hex(rx)}")
+                self._append_log(f"ACL BLOCK: {description} -> {format_hex(rx)}", "block")
+                self._set_banner("Hardware firewall blocked the frame (ACL hit).", "block")
             elif rx == b"E\n":
-                self._append_log(f"PROTOCOL ERROR: {description} -> {format_hex(rx)}")
+                self._append_log(f"PROTOCOL ERROR: {description} -> {format_hex(rx)}", "error")
+                self._set_banner("Protocol error returned by the board.", "error")
             else:
                 self._append_log(
                     f"{payload['name']}: TX={format_hex(tx)} RX={format_hex(rx)} "
-                    f"{'PASS' if passed else 'FAIL'}"
+                    f"{'PASS' if passed else 'FAIL'}",
+                    "pass" if passed else "error",
+                )
+                self._set_banner(
+                    f"{payload['name']} {'passed' if passed else 'failed'} at "
+                    f"{float(payload['throughput_mbps']):.3f} Mbps",
+                    "pass" if passed else "error",
                 )
             if expected is not None and not passed:
-                self._append_log(f"Expected {format_hex(expected)}")
+                self._append_log(f"Expected {format_hex(expected)}", "error")
         elif kind == "file_progress":
             self._update_throughput(float(payload["throughput_mbps"]), 0.001)
             self._append_log(
                 f"FILE {payload['algo']}: {payload['processed']}/{payload['total']} bytes "
-                f"(chunk {payload['chunk']})"
+                f"(chunk {payload['chunk']})",
+                "info",
+            )
+            self._set_banner(
+                f"Encrypting file via {payload['algo']}: {payload['processed']}/{payload['total']} bytes",
+                "info",
             )
         elif kind == "file_done":
             self._append_log(
                 f"FILE DONE {payload['algo']}: {payload['total_bytes']} bytes -> {payload['output_path']} "
-                f"@ {payload['throughput_mbps']:.3f} Mbps"
+                f"@ {payload['throughput_mbps']:.3f} Mbps",
+                "pass",
+            )
+            self._set_banner(
+                f"File encryption finished: {Path(payload['output_path']).name}",
+                "pass",
             )
             messagebox.showinfo(
                 "File Encryption Complete",

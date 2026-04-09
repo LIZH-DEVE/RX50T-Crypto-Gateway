@@ -159,12 +159,27 @@ Meaning of final stats:
 - `sm4 = 2`
 - `err = 0`
 
+### Demo-Polish Real-Board Check
+
+The polished GUI layer was also rechecked on the live board after adding:
+- top banner status prompts
+- colored `PASS / FAIL` log lines
+- red ACL warning banner
+- emphasized stats boxes for `ACL / AES / SM4 / ERR`
+
+Observed behavior:
+- connect state remains stable on `COM12`
+- ACL block immediately turns the banner red with a hardware-firewall style message
+- successful crypto operations switch the banner back to green
+- stats boxes visibly highlight active counters
+- the waveform, throughput, and latency readouts continue updating correctly
+
 ## Current Boundaries
 
 Still not completed on Day 03:
 - file encryption real-board validation from the GUI path
 - throughput chart calibration with long streaming runs
-- richer host-side visualization such as color-coded alarm panels
+- richer host-side visualization beyond the current banner/log/stats polish
 
 ## Conclusion
 
@@ -172,6 +187,7 @@ By the end of Day 03, the project gained its first usable software instrument pa
 
 The GUI is no longer just a local shell.
 It has already completed a first real-board walkthrough against the live `RX50T` datapath.
+It has also completed a first demo-polish validation pass on the live board.
 
 The board remains the hardware engine.
 The new GUI is the first real operator console.
