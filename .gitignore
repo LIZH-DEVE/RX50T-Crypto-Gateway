@@ -1,0 +1,44 @@
+# General
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+
+# Vivado / XSim
+.Xil/
+*.jou
+*.log
+*.pb
+*.str
+*.tmp
+*.wdb
+*.wcfg
+*.xsim
+xsim.dir/
+
+# Local temp work
+.tmp_*/
+_tmp_*/
+sim/
+sim_debug_*/
+sim_red_*/
+
+# Project-local generated folders
+contest_project/.Xil/
+contest_project/build/
+contest_project/sim/
+contest_project/sim_debug_*/
+contest_project/sim_red_*/
+contest_project/xsim.dir/
+contest_project/_tmp_*/
+contest_project/*.jou
+contest_project/*.log
+contest_project/*.pb
+
+# Root temp helpers
+.tmp_proj_*/
+.tmp_sim_*/
+.tmp_*.tcl
+
