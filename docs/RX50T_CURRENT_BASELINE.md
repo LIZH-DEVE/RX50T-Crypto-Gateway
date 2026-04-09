@@ -13,10 +13,11 @@ Design goals:
 
 The current validated mainline is:
 
-`UART -> Parser -> ACL -> AES/SM4 -> UART`
+`UART -> Parser -> BRAM-backed ACL -> AES/SM4 -> UART`
 
 `P1` extends that path with:
-- `4` fixed ACL rules
+- a BRAM-backed ACL rule table
+- current default ACL entries: `4`
 - `5` `8-bit` status counters
 - stats query over UART
 - single-block and two-block encryption
@@ -89,8 +90,10 @@ Purpose:
 - block illegal frames
 - pass legal frames downstream
 
-Current fixed rules:
-- block when the first payload byte is:
+Current implementation:
+- rules are stored in a BRAM-backed lookup table
+- the current match key is the first payload byte of each frame
+- the shipped default initialized entries block:
   - `0x58 ('X')`
   - `0x59 ('Y')`
   - `0x5A ('Z')`
@@ -214,6 +217,7 @@ Verified:
 - `UART Echo`
 - `parser probe`
 - `ACL probe`
+- `BRAM-backed ACL core`
 - `SM4 probe`
 - `crypto probe (AES/SM4)`
 - `two-block AES/SM4`
@@ -228,6 +232,7 @@ Verified on `COM12`:
 - `AES`
 - `32B SM4`
 - `32B AES`
+- latest BRAM-backed ACL smoke test
 
 Representative real-board results:
 
@@ -256,6 +261,16 @@ Representative real-board results:
   - input: `55 01 3F`
   - output: `53 05 01 02 02 01 0A`
 
+- fresh BRAM-backed ACL smoke test
+  - initial stats:
+    - `53 00 00 00 00 00 0A`
+  - `SM4 16B`: pass
+  - `AES 16B`: pass
+  - ACL block:
+    - `XYZ -> 44 0A`
+  - final stats:
+    - `53 02 01 00 01 00 0A`
+
 ### GUI File-Encryption Walkthrough
 
 Verified on the real board through the Tkinter GUI path:
@@ -282,13 +297,14 @@ Observed result:
 ## 6. Current Implementation Numbers
 
 `rx50t_uart_crypto_probe_board_top` implementation results:
-- `WNS = 4.796ns`
-- `WHS = 0.074ns`
+- `WNS = 5.856ns`
+- `WHS = 0.014ns`
 - `DRC violations = 0`
-- `Slice LUTs = 4317`
-- `Slice Registers = 4926`
+- `Slice LUTs = 4342`
+- `Slice Registers = 4970`
+- `Slice = 1676`
 - `Bonded IOB = 4`
-- `RAMB18 = 0`
+- `RAMB18 = 0.5`
 - `DSPs = 0`
 
 ## 7. Current Explicit Non-Goals

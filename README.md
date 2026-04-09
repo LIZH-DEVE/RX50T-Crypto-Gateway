@@ -4,7 +4,7 @@
 
 The current validated mainline is:
 
-`UART -> Parser -> 4-rule ACL -> AES/SM4 (16B/32B) -> UART + Stats Query`
+`UART -> Parser -> BRAM-backed ACL -> AES/SM4 (16B/32B) -> UART + Stats Query`
 
 This repository intentionally does not depend on:
 - `ARM/PS`
@@ -28,7 +28,8 @@ The GUI MVP has already completed its first real-board walkthrough against the l
 `P1 Phase 2` is complete and has fresh real-board evidence.
 
 Implemented:
-- `4` fixed ACL rules: `X / Y / Z / W`
+- BRAM-backed ACL rule table
+- current default ACL entries: `X / Y / Z / W`
 - `AES-128` and `SM4-128`
 - single-block (`16B`) and two-block (`32B`) encryption
 - protocol error fallback `E\n`
@@ -87,7 +88,7 @@ Board baseline:
 - `UART -> Parser -> ACL -> SM4 -> UART`
 - `UART -> Parser -> ACL -> AES/SM4 -> UART`
 - `UART -> Parser -> 4-rule ACL -> AES/SM4 -> UART + Stats Query`
-- `UART -> Parser -> 4-rule ACL -> AES/SM4 (16B/32B) -> UART + Stats Query`
+- `UART -> Parser -> BRAM-backed ACL -> AES/SM4 (16B/32B) -> UART + Stats Query`
 
 ## Explicitly Out of Scope
 
@@ -114,6 +115,23 @@ py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --query-st
 ```
 
 ## Latest Verified Results
+
+Latest BRAM-backed ACL build:
+- `DRC = 0`
+- `WNS = 5.856ns`
+- `WHS = 0.014ns`
+- `Slice LUTs = 4342`
+- `Slice Registers = 4970`
+- `Slice = 1676`
+- `BRAM = 0.5`
+- `DSP = 0`
+
+Fresh BRAM-backed ACL smoke test:
+- initial stats query: `53 00 00 00 00 00 0A`
+- `SM4 16B`: pass
+- `AES 16B`: pass
+- ACL block: `XYZ -> 44 0A`
+- final stats query: `53 02 01 00 01 00 0A`
 
 Real-board verified:
 - initial stats query: `53 00 00 00 00 00 0A`

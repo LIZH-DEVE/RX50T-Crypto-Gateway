@@ -63,7 +63,13 @@ module tb_contest_acl_core;
     endtask
 
     task automatic expect_capture_count(input integer expected);
+        integer wait_cycles;
         begin
+            wait_cycles = 0;
+            while ((capture_idx != expected) && (wait_cycles < 64)) begin
+                @(posedge clk);
+                wait_cycles = wait_cycles + 1;
+            end
             if (capture_idx != expected) begin
                 $fatal(1, "Expected capture count %0d, got %0d", expected, capture_idx);
             end
@@ -85,7 +91,7 @@ module tb_contest_acl_core;
         drive_byte(8'h41, 8'h41, 1'b0);
         drive_byte(8'h41, 8'h42, 1'b0);
         drive_byte(8'h41, 8'h43, 1'b1);
-        repeat (3) @(posedge clk);
+        repeat (8) @(posedge clk);
 
         expect_capture_count(3);
         if (capture_data[0] != 8'h41 || capture_last[0] != 1'b0) $fatal(1, "Pass-through byte0 mismatch");
@@ -96,7 +102,7 @@ module tb_contest_acl_core;
         drive_byte(8'h58, 8'h58, 1'b0);
         drive_byte(8'h58, 8'h59, 1'b0);
         drive_byte(8'h58, 8'h5A, 1'b1);
-        repeat (5) @(posedge clk);
+        repeat (8) @(posedge clk);
 
         expect_capture_count(5);
         if (capture_data[3] != 8'h44 || capture_last[3] != 1'b0) $fatal(1, "Drop byte0 mismatch");
@@ -104,7 +110,7 @@ module tb_contest_acl_core;
 
         // Single-byte blocked frame should still emit D\n
         drive_byte(8'h58, 8'h58, 1'b1);
-        repeat (5) @(posedge clk);
+        repeat (8) @(posedge clk);
 
         expect_capture_count(7);
         if (capture_data[5] != 8'h44 || capture_last[5] != 1'b0) $fatal(1, "Single drop byte0 mismatch");
@@ -112,22 +118,30 @@ module tb_contest_acl_core;
 
         // Additional fixed rules: Y, Z, W should all block.
         drive_byte(8'h59, 8'h59, 1'b1);
-        repeat (5) @(posedge clk);
+        repeat (8) @(posedge clk);
         expect_capture_count(9);
         if (capture_data[7] != 8'h44 || capture_last[7] != 1'b0) $fatal(1, "Y rule byte0 mismatch");
         if (capture_data[8] != 8'h0A || capture_last[8] != 1'b1) $fatal(1, "Y rule byte1 mismatch");
 
         drive_byte(8'h5A, 8'h5A, 1'b1);
-        repeat (5) @(posedge clk);
+        repeat (8) @(posedge clk);
         expect_capture_count(11);
         if (capture_data[9] != 8'h44 || capture_last[9] != 1'b0) $fatal(1, "Z rule byte0 mismatch");
         if (capture_data[10] != 8'h0A || capture_last[10] != 1'b1) $fatal(1, "Z rule byte1 mismatch");
 
         drive_byte(8'h57, 8'h57, 1'b1);
-        repeat (5) @(posedge clk);
+        repeat (8) @(posedge clk);
         expect_capture_count(13);
         if (capture_data[11] != 8'h44 || capture_last[11] != 1'b0) $fatal(1, "W rule byte0 mismatch");
         if (capture_data[12] != 8'h0A || capture_last[12] != 1'b1) $fatal(1, "W rule byte1 mismatch");
+
+        // Recovery after BRAM-backed lookup and drop: legal frame should still pass.
+        drive_byte(8'h51, 8'h51, 1'b0);
+        drive_byte(8'h51, 8'h52, 1'b1);
+        repeat (8) @(posedge clk);
+        expect_capture_count(15);
+        if (capture_data[13] != 8'h51 || capture_last[13] != 1'b0) $fatal(1, "Recovery byte0 mismatch");
+        if (capture_data[14] != 8'h52 || capture_last[14] != 1'b1) $fatal(1, "Recovery byte1 mismatch");
 
         $display("contest_acl_core test passed.");
         $finish;

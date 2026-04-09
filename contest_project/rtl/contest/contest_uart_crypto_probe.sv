@@ -34,13 +34,18 @@ module contest_uart_crypto_probe #(
     reg        frame_selector_seen_q;
     reg        frame_proto_error_q;
     reg        frame_query_q;
-    reg        frame_block_q;
     reg        frame_algo_sel_q;
+    reg        pending_data_stats_q;
+    reg        pending_data_algo_q;
+    reg        acl_block_seen_q;
 
     reg        acl_in_valid_q;
     reg  [7:0] acl_in_data_q;
     reg        acl_in_last_q;
-    wire [7:0] acl_match_key;
+    reg        acl_feed_valid_q;
+    reg  [7:0] acl_feed_data_q;
+    reg        acl_feed_last_q;
+    reg  [7:0] acl_feed_key_q;
 
     wire       acl_valid;
     wire [7:0] acl_data;
@@ -64,17 +69,6 @@ module contest_uart_crypto_probe #(
     wire [7:0] bridge_data;
     wire       bridge_last;
     wire       tx_ready;
-
-    assign acl_match_key = frame_key_valid_q ? frame_key_q : acl_in_data_q;
-
-    function automatic bit is_block_key(input [7:0] key);
-        begin
-            is_block_key = (key == 8'h58) || // X
-                           (key == 8'h59) || // Y
-                           (key == 8'h5A) || // Z
-                           (key == 8'h57);   // W
-        end
-    endfunction
 
     function automatic [7:0] stats_byte(input [2:0] idx);
         begin
@@ -124,10 +118,10 @@ module contest_uart_crypto_probe #(
     contest_acl_core u_acl (
         .clk             (i_clk),
         .rst_n           (i_rst_n),
-        .parser_valid    (acl_in_valid_q),
-        .parser_match_key(acl_match_key),
-        .parser_payload  (acl_in_data_q),
-        .parser_last     (acl_in_last_q),
+        .parser_valid    (acl_feed_valid_q),
+        .parser_match_key(acl_feed_key_q),
+        .parser_payload  (acl_feed_data_q),
+        .parser_last     (acl_feed_last_q),
         .acl_valid       (acl_valid),
         .acl_data        (acl_data),
         .acl_last        (acl_last)
@@ -158,6 +152,20 @@ module contest_uart_crypto_probe #(
         .o_uart_tx(o_uart_tx)
     );
 
+    always @(posedge i_clk) begin
+        if (!i_rst_n) begin
+            acl_feed_valid_q <= 1'b0;
+            acl_feed_data_q  <= 8'd0;
+            acl_feed_last_q  <= 1'b0;
+            acl_feed_key_q   <= 8'd0;
+        end else begin
+            acl_feed_valid_q <= acl_in_valid_q;
+            acl_feed_data_q  <= acl_in_data_q;
+            acl_feed_last_q  <= acl_in_last_q;
+            acl_feed_key_q   <= frame_key_valid_q ? frame_key_q : acl_in_data_q;
+        end
+    end
+
     always @(posedge i_clk or negedge i_rst_n) begin
         if (!i_rst_n) begin
             frame_key_q           <= 8'd0;
@@ -165,8 +173,10 @@ module contest_uart_crypto_probe #(
             frame_selector_seen_q <= 1'b0;
             frame_proto_error_q   <= 1'b0;
             frame_query_q         <= 1'b0;
-            frame_block_q         <= 1'b0;
             frame_algo_sel_q      <= ALG_SM4;
+            pending_data_stats_q  <= 1'b0;
+            pending_data_algo_q   <= ALG_SM4;
+            acl_block_seen_q      <= 1'b0;
             acl_in_valid_q        <= 1'b0;
             acl_in_data_q         <= 8'd0;
             acl_in_last_q         <= 1'b0;
@@ -197,7 +207,6 @@ module contest_uart_crypto_probe #(
                 frame_selector_seen_q <= 1'b0;
                 frame_proto_error_q   <= 1'b0;
                 frame_query_q         <= 1'b0;
-                frame_block_q         <= 1'b0;
                 frame_algo_sel_q      <= ALG_SM4;
             end
 
@@ -219,7 +228,7 @@ module contest_uart_crypto_probe #(
                         if (!frame_key_valid_q) begin
                             frame_key_q       <= parser_payload_byte;
                             frame_key_valid_q <= 1'b1;
-                            frame_block_q     <= is_block_key(parser_payload_byte);
+                            acl_block_seen_q  <= 1'b0;
                         end
                         acl_in_valid_q <= 1'b1;
                         acl_in_data_q  <= parser_payload_byte;
@@ -229,7 +238,7 @@ module contest_uart_crypto_probe #(
                     if (!frame_key_valid_q) begin
                         frame_key_q       <= parser_payload_byte;
                         frame_key_valid_q <= 1'b1;
-                        frame_block_q     <= is_block_key(parser_payload_byte);
+                        acl_block_seen_q  <= 1'b0;
                     end
                     acl_in_valid_q <= 1'b1;
                     acl_in_data_q  <= parser_payload_byte;
@@ -247,20 +256,30 @@ module contest_uart_crypto_probe #(
                     pending_error_q <= 1'b1;
                     stat_error_frames_q <= stat_error_frames_q + 8'd1;
                 end else begin
-                    stat_total_frames_q <= stat_total_frames_q + 8'd1;
-                    if (frame_block_q) begin
-                        stat_acl_blocks_q <= stat_acl_blocks_q + 8'd1;
-                    end else if (frame_algo_sel_q == ALG_AES) begin
-                        stat_aes_frames_q <= stat_aes_frames_q + 8'd1;
-                    end else begin
-                        stat_sm4_frames_q <= stat_sm4_frames_q + 8'd1;
-                    end
+                    pending_data_stats_q <= 1'b1;
+                    pending_data_algo_q  <= frame_algo_sel_q;
                 end
                 frame_key_valid_q     <= 1'b0;
                 frame_selector_seen_q <= 1'b0;
                 frame_proto_error_q   <= 1'b0;
                 frame_query_q         <= 1'b0;
-                frame_block_q         <= 1'b0;
+            end
+
+            if (acl_valid && (acl_data == 8'h44) && !acl_last) begin
+                acl_block_seen_q <= 1'b1;
+            end
+
+            if (pending_data_stats_q && acl_valid && acl_last) begin
+                stat_total_frames_q  <= stat_total_frames_q + 8'd1;
+                if (acl_block_seen_q) begin
+                    stat_acl_blocks_q <= stat_acl_blocks_q + 8'd1;
+                end else if (pending_data_algo_q == ALG_AES) begin
+                    stat_aes_frames_q <= stat_aes_frames_q + 8'd1;
+                end else begin
+                    stat_sm4_frames_q <= stat_sm4_frames_q + 8'd1;
+                end
+                pending_data_stats_q <= 1'b0;
+                acl_block_seen_q     <= 1'b0;
             end
 
             if (pending_error_q) begin

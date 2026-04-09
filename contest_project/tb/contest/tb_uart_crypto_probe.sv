@@ -223,6 +223,25 @@ module tb_uart_crypto_probe;
 
         #(20 * BIT_PERIODNS);
 
+        // Add one extra BRAM-backed rule dynamically and verify the top-level
+        // stats follow the ACL output instead of a hardcoded key list.
+        dut.u_probe.u_acl.rule_table_q[8'h51] = 8'h01; // Q -> block
+        fork
+            begin
+                uart_send_byte(8'h55);
+                uart_send_byte(8'd3);
+                uart_send_byte(8'h51);
+                uart_send_byte(8'h52);
+                uart_send_byte(8'h53);
+            end
+            begin
+                uart_expect_byte(8'h44);
+                uart_expect_byte(8'h0A);
+            end
+        join
+
+        #(20 * BIT_PERIODNS);
+
         // Query counters -> S total acl aes sm4 err \n
         fork
             begin
@@ -232,8 +251,8 @@ module tb_uart_crypto_probe;
             end
             begin
                 uart_expect_byte(8'h53);
-                uart_expect_byte(8'h05);
-                uart_expect_byte(8'h01);
+                uart_expect_byte(8'h06);
+                uart_expect_byte(8'h02);
                 uart_expect_byte(8'h02);
                 uart_expect_byte(8'h02);
                 uart_expect_byte(8'h01);
