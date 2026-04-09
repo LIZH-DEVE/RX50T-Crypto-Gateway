@@ -4,7 +4,9 @@ from crypto_gateway_protocol import (
     StatsCounters,
     build_frame,
     case_aes_known_vector,
+    case_block_ascii,
     case_query_stats,
+    extract_first_payload_key,
     parse_stats_response,
     split_blocks_for_transport,
 )
@@ -36,6 +38,13 @@ class CryptoGatewayProtocolTests(unittest.TestCase):
     def test_aes_known_vector_frame_has_explicit_selector(self) -> None:
         case = case_aes_known_vector()
         self.assertEqual(case.tx[:3], bytes([0x55, 0x11, 0x41]))
+
+    def test_extract_first_payload_key_for_acl_probe(self) -> None:
+        case = case_block_ascii("XYZ")
+        self.assertEqual(extract_first_payload_key(case.tx), "X")
+
+    def test_extract_first_payload_key_rejects_short_frame(self) -> None:
+        self.assertIsNone(extract_first_payload_key(b"\x55\x00"))
 
 
 if __name__ == "__main__":

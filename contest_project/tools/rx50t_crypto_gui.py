@@ -16,6 +16,7 @@ from crypto_gateway_protocol import (
     case_query_stats,
     case_sm4_known_vector,
     case_sm4_two_block_vector,
+    extract_first_payload_key,
     format_hex,
 )
 from crypto_gateway_worker import GatewayWorker, WorkerEvent
@@ -40,6 +41,7 @@ class CryptoGatewayApp(tk.Tk):
         self.throughput_label = tk.StringVar(value="0.000 Mbps")
         self.last_latency_label = tk.StringVar(value="-")
         self.banner_text = tk.StringVar(value="Ready. Connect the board and query stats.")
+        self.hot_rule_text = tk.StringVar(value="Hot Rule: none yet")
         self.stats_vars = {
             "total": tk.StringVar(value="0"),
             "acl": tk.StringVar(value="0"),
@@ -48,6 +50,8 @@ class CryptoGatewayApp(tk.Tk):
             "err": tk.StringVar(value="0"),
         }
         self.stat_value_labels: dict[str, tk.Label] = {}
+        self.acl_rule_hit_vars = {key: tk.StringVar(value="0") for key in DEFAULT_ACL_RULES}
+        self.acl_rule_hit_labels: dict[str, tk.Label] = {}
 
         self._build_ui()
         self._refresh_ports()
@@ -112,9 +116,17 @@ class CryptoGatewayApp(tk.Tk):
             acl_rules,
             text="Current bitstream default blocked first-byte keys:",
         ).grid(row=0, column=0, columnspan=len(DEFAULT_ACL_RULES), sticky="w", pady=(0, 6))
+        ttk.Label(
+            acl_rules,
+            textvariable=self.hot_rule_text,
+            foreground="#991b1b",
+            font=("Segoe UI", 10, "bold"),
+        ).grid(row=0, column=len(DEFAULT_ACL_RULES), sticky="e", padx=(12, 0))
         for idx, key in enumerate(DEFAULT_ACL_RULES):
+            cell = ttk.Frame(acl_rules, padding=(0, 0, 6, 0))
+            cell.grid(row=1, column=idx, padx=4, sticky="w")
             badge = tk.Label(
-                acl_rules,
+                cell,
                 text=key,
                 bg="#fee2e2",
                 fg="#991b1b",
@@ -124,7 +136,20 @@ class CryptoGatewayApp(tk.Tk):
                 padx=12,
                 pady=4,
             )
-            badge.grid(row=1, column=idx, padx=4, sticky="w")
+            badge.grid(row=0, column=0, sticky="w")
+            hit_label = tk.Label(
+                cell,
+                textvariable=self.acl_rule_hit_vars[key],
+                bg="#e2e8f0",
+                fg="#0f172a",
+                font=("Segoe UI", 10, "bold"),
+                relief="ridge",
+                bd=1,
+                padx=10,
+                pady=4,
+            )
+            hit_label.grid(row=0, column=1, padx=(4, 0), sticky="w")
+            self.acl_rule_hit_labels[key] = hit_label
 
         metrics = ttk.LabelFrame(self, text="Live Metrics", padding=12)
         metrics.grid(row=2, column=0, padx=12, pady=(8, 0), sticky="ew")
@@ -295,6 +320,26 @@ class CryptoGatewayApp(tk.Tk):
             bg, fg = palette[key]
             label.configure(bg=bg, fg=fg)
 
+    def _record_acl_rule_hit(self, tx: bytes) -> None:
+        key = extract_first_payload_key(tx)
+        if not key or key not in self.acl_rule_hit_vars:
+            return
+        current = int(self.acl_rule_hit_vars[key].get())
+        updated = current + 1
+        self.acl_rule_hit_vars[key].set(str(updated))
+        for rule, label in self.acl_rule_hit_labels.items():
+            hits = int(self.acl_rule_hit_vars[rule].get())
+            if hits > 0:
+                label.configure(bg="#fee2e2", fg="#991b1b")
+            else:
+                label.configure(bg="#e2e8f0", fg="#0f172a")
+        hot_rule = max(DEFAULT_ACL_RULES, key=lambda item: int(self.acl_rule_hit_vars[item].get()))
+        hot_hits = int(self.acl_rule_hit_vars[hot_rule].get())
+        if hot_hits > 0:
+            self.hot_rule_text.set(f"Hot Rule: {hot_rule} ({hot_hits} hits)")
+        else:
+            self.hot_rule_text.set("Hot Rule: none yet")
+
     def _handle_event(self, event: WorkerEvent) -> None:
         kind = event.kind
         payload = event.payload
@@ -320,8 +365,13 @@ class CryptoGatewayApp(tk.Tk):
             if payload["stats"] is not None:
                 self._apply_stats(payload["stats"])
             if rx == b"D\n":
+                self._record_acl_rule_hit(tx)
                 self._append_log(f"ACL BLOCK: {description} -> {format_hex(rx)}", "block")
-                self._set_banner("Hardware firewall blocked the frame (ACL hit).", "block")
+                rule = extract_first_payload_key(tx)
+                if rule:
+                    self._set_banner(f"Hardware firewall blocked the frame (ACL hit: {rule}).", "block")
+                else:
+                    self._set_banner("Hardware firewall blocked the frame (ACL hit).", "block")
             elif rx == b"E\n":
                 self._append_log(f"PROTOCOL ERROR: {description} -> {format_hex(rx)}", "error")
                 self._set_banner("Protocol error returned by the board.", "error")

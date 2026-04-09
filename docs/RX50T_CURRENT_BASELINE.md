@@ -315,6 +315,18 @@ Current displayed blocked keys:
 This is a display-only reflection of the current shipped bitstream defaults.
 It is not yet a runtime rule-update interface.
 
+### GUI Session-Level ACL Hit Tracking
+
+The GUI also keeps a session-local counter for ACL block events that it directly observes.
+
+Current behavior:
+- each GUI-initiated blocked frame increments the matching first-byte key counter
+- blocked keys with non-zero hits are highlighted
+- the GUI surfaces a `Hot Rule` summary for the most frequently blocked key in the current session
+
+This is a presentation-layer feature only.
+It does not modify the board bitstream or expose runtime ACL table writes.
+
 ## 6. Current Implementation Numbers
 
 `rx50t_uart_crypto_probe_board_top` implementation results:

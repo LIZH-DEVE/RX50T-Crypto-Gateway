@@ -80,6 +80,18 @@ def format_hex(data: bytes) -> str:
     return data.hex(" ") if data else ""
 
 
+def extract_first_payload_key(frame: bytes) -> str | None:
+    if len(frame) < 3 or frame[0] != 0x55:
+        return None
+    payload_len = frame[1]
+    if payload_len < 1 or len(frame) < payload_len + 2:
+        return None
+    first = frame[2]
+    if 32 <= first <= 126:
+        return chr(first)
+    return f"0x{first:02X}"
+
+
 def parse_stats_response(raw: bytes) -> StatsCounters:
     if len(raw) != 7 or raw[:1] != b"S" or raw[-1:] != b"\n":
         raise ValueError(f"invalid stats response: {format_hex(raw)}")

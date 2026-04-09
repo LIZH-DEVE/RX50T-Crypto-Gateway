@@ -21,6 +21,7 @@ The current system direction is:
 - board-side pure `PL` datapath
 - PC-side GUI as the instrument panel for demo, monitoring, and batch testing
 - the GUI exposes the compiled ACL rule table carried by the current bitstream
+- the GUI also tracks session-level ACL hit counts and highlights the current hot rule
 
 The GUI MVP has already completed its first real-board walkthrough against the live `RX50T` board.
 
