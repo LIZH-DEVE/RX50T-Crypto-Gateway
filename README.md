@@ -17,6 +17,12 @@ The goal is to keep the board focused on the hard real-time work:
 - AES/SM4 block encryption
 - lightweight observability through stats counters
 
+The current system direction is:
+- board-side pure `PL` datapath
+- PC-side GUI as the instrument panel for demo, monitoring, and batch testing
+
+The GUI MVP has already completed its first real-board walkthrough against the live `RX50T` board.
+
 ## Current Status
 
 `P1 Phase 2` is complete and has fresh real-board evidence.
@@ -51,6 +57,8 @@ Board baseline:
   - simulation testbenches
 - `contest_project/tools/`
   - host-side UART test tools
+  - shared host protocol layer
+  - Tkinter GUI MVP
 - `contest_project/scripts/`
   - Vivado build scripts
 - `contest_project/constraints/`
@@ -68,6 +76,8 @@ Board baseline:
 - [Architecture overview](./docs/RX50T_ARCHITECTURE_OVERVIEW.md)
 - [P1 demo runbook](./docs/RX50T_P1_DEMO_RUNBOOK.md)
 - [Daily progress index](./daily-progress/README.md)
+- GUI entry:
+  - `py -3 .\contest_project\tools\rx50t_crypto_gui.py`
 
 ## Implemented Capability
 
@@ -114,6 +124,16 @@ Real-board verified:
 - `AES` two-block vector: pass
 - invalid selector: `45 0A`
 - final stats query: `53 05 01 02 02 01 0A`
+
+GUI real-board walkthrough verified:
+- connect `COM12`
+- `Query Stats`: pass
+- `SM4 16B`: pass
+- `AES 16B`: pass
+- `ACL Block (XYZ)`: pass
+- `SM4 32B`: pass
+- `AES 32B`: pass
+- final GUI stats: `53 05 01 02 02 00 0A`
 
 ## Relation to the Original Project
 

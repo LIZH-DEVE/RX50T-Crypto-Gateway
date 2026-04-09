@@ -26,6 +26,12 @@ This mainline now has:
 - implementation evidence
 - real-board evidence
 
+The current system boundary is:
+- board-side pure `PL` datapath
+- PC-side Python tools for testing, observability, and GUI demo
+
+The GUI MVP has already completed a first real-board walkthrough over the live UART link.
+
 ## 2. Board Baseline
 
 - board: `RX50T`

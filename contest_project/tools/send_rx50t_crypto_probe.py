@@ -1,6 +1,5 @@
 import argparse
 import sys
-import time
 
 try:
     import serial
@@ -9,33 +8,18 @@ except ImportError as exc:  # pragma: no cover
         "pyserial is required. Install it with: py -3 -m pip install pyserial"
     ) from exc
 
-
-AES128_PT = bytes.fromhex("00 11 22 33 44 55 66 77 88 99 aa bb cc dd ee ff")
-AES128_CT = bytes.fromhex("69 c4 e0 d8 6a 7b 04 30 d8 cd b7 80 70 b4 c5 5a")
-SM4_PT = bytes.fromhex("01 23 45 67 89 ab cd ef fe dc ba 98 76 54 32 10")
-SM4_CT = bytes.fromhex("68 1e df 34 d2 06 96 5e 86 b3 e9 4f 53 6e 42 46")
-AES128_PT2 = bytes.fromhex("ff ee dd cc bb aa 99 88 77 66 55 44 33 22 11 00")
-AES128_CT2 = bytes.fromhex("1b 87 23 78 79 5f 4f fd 77 28 55 fc 87 ca 96 4d")
-SM4_PT2 = bytes.fromhex("00 11 22 33 44 55 66 77 88 99 aa bb cc dd ee ff")
-SM4_CT2 = bytes.fromhex("09 32 5c 48 53 83 2d cb 93 37 a5 98 4f 67 1b 9a")
-
-
-def build_frame(payload: bytes) -> bytes:
-    if not payload:
-        raise ValueError("payload must not be empty")
-    if len(payload) > 64:
-        raise ValueError("payload length must be <= 64 bytes")
-    return bytes([0x55, len(payload)]) + payload
-
-
-def read_exact(ser: serial.Serial, expected_len: int, timeout_s: float) -> bytes:
-    deadline = time.time() + timeout_s
-    buf = bytearray()
-    while time.time() < deadline and len(buf) < expected_len:
-        chunk = ser.read(expected_len - len(buf))
-        if chunk:
-            buf.extend(chunk)
-    return bytes(buf)
+from crypto_gateway_protocol import (
+    StatsCounters,
+    case_aes_known_vector,
+    case_aes_two_block_vector,
+    case_block_ascii,
+    case_invalid_selector,
+    case_query_stats,
+    case_sm4_known_vector,
+    case_sm4_two_block_vector,
+    format_hex,
+    run_case_on_serial,
+)
 
 
 def main() -> int:
@@ -97,62 +81,57 @@ def main() -> int:
         if flag
     )
     if mode_count != 1:
-        raise SystemExit("Choose exactly one of --sm4-known-vector, --aes-known-vector, --sm4-two-block-vector, --aes-two-block-vector, --block-ascii, --invalid-selector, or --query-stats")
+        raise SystemExit(
+            "Choose exactly one of --sm4-known-vector, --aes-known-vector, "
+            "--sm4-two-block-vector, --aes-two-block-vector, --block-ascii, "
+            "--invalid-selector, or --query-stats"
+        )
 
     if args.sm4_known_vector:
-        tx = build_frame(SM4_PT)
-        expected = SM4_CT
+        case = case_sm4_known_vector()
     elif args.aes_known_vector:
-        tx = build_frame(b"A" + AES128_PT)
-        expected = AES128_CT
+        case = case_aes_known_vector()
     elif args.sm4_two_block_vector:
-        tx = build_frame(SM4_PT + SM4_PT2)
-        expected = SM4_CT + SM4_CT2
+        case = case_sm4_two_block_vector()
     elif args.aes_two_block_vector:
-        tx = build_frame(b"A" + AES128_PT + AES128_PT2)
-        expected = AES128_CT + AES128_CT2
+        case = case_aes_two_block_vector()
     elif args.invalid_selector:
-        tx = build_frame(b"Q" + AES128_PT)
-        expected = b"E\n"
+        case = case_invalid_selector()
     elif args.query_stats:
-        tx = build_frame(b"?")
+        expected_stats = None
         if args.expect_stats:
             parts = [int(part, 0) for part in args.expect_stats.split(",")]
             if len(parts) != 5:
-                raise SystemExit("--expect-stats requires 5 comma-separated values: total,acl,aes,sm4,err")
+                raise SystemExit(
+                    "--expect-stats requires 5 comma-separated values: total,acl,aes,sm4,err"
+                )
             for value in parts:
                 if not 0 <= value <= 255:
                     raise SystemExit("--expect-stats values must be between 0 and 255")
-            expected = bytes([0x53, *parts, 0x0A])
-        else:
-            expected = None
+            expected_stats = StatsCounters(*parts)
+        case = case_query_stats(expected_stats)
     else:
-        payload = args.block_ascii.encode("ascii")
-        tx = build_frame(payload)
-        expected = b"D\n"
+        case = case_block_ascii(args.block_ascii)
 
-    print(f"[TX] {tx.hex(' ')}")
-    if expected is None:
+    print(f"[TX] {format_hex(case.tx)}")
+    if case.expected is None:
         print("[EXPECT] stats response with 5 counters")
     else:
-        print(f"[EXPECT] {expected.hex(' ')}")
+        print(f"[EXPECT] {format_hex(case.expected)}")
 
     with serial.Serial(args.port, args.baud, timeout=0.1) as ser:
-        ser.reset_input_buffer()
-        ser.reset_output_buffer()
-        ser.write(tx)
-        ser.flush()
-        rx_len = 7 if args.query_stats else len(expected)
-        rx = read_exact(ser, rx_len, args.timeout)
+        result = run_case_on_serial(ser, case, args.timeout)
 
-    print(f"[RX] {rx.hex(' ')}")
-    if args.query_stats and expected is None:
-        if len(rx) == 7 and rx[:1] == b"S" and rx[-1:] == b"\n":
-            total, acl, aes, sm4, err = rx[1], rx[2], rx[3], rx[4], rx[5]
-            print(f"[STATS] total={total} acl={acl} aes={aes} sm4={sm4} err={err}")
+    print(f"[RX] {format_hex(result.rx)}")
+    if args.query_stats and case.expected is None:
+        if result.stats is not None:
+            print(
+                f"[STATS] total={result.stats.total} acl={result.stats.acl} "
+                f"aes={result.stats.aes} sm4={result.stats.sm4} err={result.stats.err}"
+            )
             print("[PASS] stats query response matched format.")
             return 0
-    elif rx == expected:
+    elif result.passed:
         print("[PASS] crypto probe response matched.")
         return 0
 

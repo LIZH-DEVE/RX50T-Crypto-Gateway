@@ -12,6 +12,7 @@ Recording rules:
 
 - [Day 01](./day01/README.md)
 - [Day 02](./day02/README.md)
+- [Day 03](./day03/README.md)
 
 ## Suggested Daily Format
 
