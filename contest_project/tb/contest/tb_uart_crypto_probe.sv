@@ -205,6 +205,23 @@ module tb_uart_crypto_probe;
 
         #(20 * BIT_PERIODNS);
 
+        // New default BRAM-backed rule: P should also block.
+        fork
+            begin
+                uart_send_byte(8'h55);
+                uart_send_byte(8'd3);
+                uart_send_byte(8'h50);
+                uart_send_byte(8'h51);
+                uart_send_byte(8'h52);
+            end
+            begin
+                uart_expect_byte(8'h44);
+                uart_expect_byte(8'h0A);
+            end
+        join
+
+        #(20 * BIT_PERIODNS);
+
         // Invalid explicit selector -> E\n
         fork
             begin
@@ -251,8 +268,8 @@ module tb_uart_crypto_probe;
             end
             begin
                 uart_expect_byte(8'h53);
-                uart_expect_byte(8'h06);
-                uart_expect_byte(8'h02);
+                uart_expect_byte(8'h07);
+                uart_expect_byte(8'h03);
                 uart_expect_byte(8'h02);
                 uart_expect_byte(8'h02);
                 uart_expect_byte(8'h01);

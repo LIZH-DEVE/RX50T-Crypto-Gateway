@@ -4,7 +4,7 @@
 
 The current validated mainline is:
 
-`UART -> Parser -> BRAM-backed ACL -> AES/SM4 (16B/32B) -> UART + Stats Query`
+`UART -> Parser -> 8-rule BRAM-backed ACL -> AES/SM4 (16B/32B) -> UART + Stats Query`
 
 This repository intentionally does not depend on:
 - `ARM/PS`
@@ -20,6 +20,7 @@ The goal is to keep the board focused on the hard real-time work:
 The current system direction is:
 - board-side pure `PL` datapath
 - PC-side GUI as the instrument panel for demo, monitoring, and batch testing
+- the GUI exposes the compiled ACL rule table carried by the current bitstream
 
 The GUI MVP has already completed its first real-board walkthrough against the live `RX50T` board.
 
@@ -29,7 +30,7 @@ The GUI MVP has already completed its first real-board walkthrough against the l
 
 Implemented:
 - BRAM-backed ACL rule table
-- current default ACL entries: `X / Y / Z / W`
+- current default ACL entries: `X / Y / Z / W / P / R / T / U`
 - `AES-128` and `SM4-128`
 - single-block (`16B`) and two-block (`32B`) encryption
 - protocol error fallback `E\n`
@@ -88,7 +89,7 @@ Board baseline:
 - `UART -> Parser -> ACL -> SM4 -> UART`
 - `UART -> Parser -> ACL -> AES/SM4 -> UART`
 - `UART -> Parser -> 4-rule ACL -> AES/SM4 -> UART + Stats Query`
-- `UART -> Parser -> BRAM-backed ACL -> AES/SM4 (16B/32B) -> UART + Stats Query`
+- `UART -> Parser -> 8-rule BRAM-backed ACL -> AES/SM4 (16B/32B) -> UART + Stats Query`
 
 ## Explicitly Out of Scope
 
@@ -132,6 +133,14 @@ Fresh BRAM-backed ACL smoke test:
 - `AES 16B`: pass
 - ACL block: `XYZ -> 44 0A`
 - final stats query: `53 02 01 00 01 00 0A`
+
+Expanded rule-table smoke test:
+- before `XYZ`: `53 00 00 00 00 00 0A`
+- `XYZ -> 44 0A`
+- after `XYZ`: `53 01 01 00 00 00 0A`
+- before `PQR`: `53 01 01 00 00 00 0A`
+- `PQR -> 44 0A`
+- after `PQR`: `53 02 02 00 00 00 0A`
 
 Real-board verified:
 - initial stats query: `53 00 00 00 00 00 0A`

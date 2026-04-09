@@ -17,7 +17,7 @@ The current validated mainline is:
 
 `P1` extends that path with:
 - a BRAM-backed ACL rule table
-- current default ACL entries: `4`
+- current default ACL entries: `8`
 - `5` `8-bit` status counters
 - stats query over UART
 - single-block and two-block encryption
@@ -98,6 +98,10 @@ Current implementation:
   - `0x59 ('Y')`
   - `0x5A ('Z')`
   - `0x57 ('W')`
+  - `0x50 ('P')`
+  - `0x52 ('R')`
+  - `0x54 ('T')`
+  - `0x55 ('U')`
 
 Block response:
 - `D\n`
@@ -294,6 +298,23 @@ Observed result:
 - both output files remained `32B`
 - both generated ciphertext files matched their expected references exactly
 
+### GUI ACL Rule-Table Display
+
+The Tkinter GUI now shows the compiled ACL rule table directly in the control panel.
+
+Current displayed blocked keys:
+- `X`
+- `Y`
+- `Z`
+- `W`
+- `P`
+- `R`
+- `T`
+- `U`
+
+This is a display-only reflection of the current shipped bitstream defaults.
+It is not yet a runtime rule-update interface.
+
 ## 6. Current Implementation Numbers
 
 `rx50t_uart_crypto_probe_board_top` implementation results:
@@ -307,7 +328,25 @@ Observed result:
 - `RAMB18 = 0.5`
 - `DSPs = 0`
 
-## 7. Current Explicit Non-Goals
+## 7. Fresh Expanded ACL Smoke Test
+
+The latest real-board check also verified one of the newly added default ACL entries.
+
+Observed on `COM12` with short host-side spacing between frames:
+- before `XYZ`:
+  - `53 00 00 00 00 00 0A`
+- `XYZ` block:
+  - `44 0A`
+- after `XYZ`:
+  - `53 01 01 00 00 00 0A`
+- before `PQR`:
+  - `53 01 01 00 00 00 0A`
+- `PQR` block:
+  - `44 0A`
+- after `PQR`:
+  - `53 02 02 00 00 00 0A`
+
+## 8. Current Explicit Non-Goals
 
 Not part of the current baseline:
 - dynamic key download
@@ -318,7 +357,7 @@ Not part of the current baseline:
 - full `Ethernet/IP/UDP` stack
 - zero-copy fast path
 
-## 8. One-Line Summary
+## 9. One-Line Summary
 
 The current `RX50T` version is now a real pure-`PL` security datapath with verified evidence for:
 

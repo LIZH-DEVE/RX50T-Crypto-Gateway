@@ -7,6 +7,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from crypto_gateway_protocol import (
+    DEFAULT_ACL_RULES,
     StatsCounters,
     case_aes_known_vector,
     case_aes_two_block_vector,
@@ -104,6 +105,26 @@ class CryptoGatewayApp(tk.Tk):
         ttk.Label(acl_frame, text="ACL Probe").grid(row=0, column=0, padx=(0, 8))
         ttk.Entry(acl_frame, textvariable=self.acl_text, width=14).grid(row=0, column=1, padx=(0, 8), sticky="ew")
         ttk.Button(acl_frame, text="Send Block Test", command=self._send_acl_probe).grid(row=0, column=2)
+
+        acl_rules = ttk.LabelFrame(actions, text="Compiled ACL Rule Table (BRAM)", padding=10)
+        acl_rules.grid(row=2, column=0, columnspan=4, sticky="ew", padx=4, pady=(8, 0))
+        ttk.Label(
+            acl_rules,
+            text="Current bitstream default blocked first-byte keys:",
+        ).grid(row=0, column=0, columnspan=len(DEFAULT_ACL_RULES), sticky="w", pady=(0, 6))
+        for idx, key in enumerate(DEFAULT_ACL_RULES):
+            badge = tk.Label(
+                acl_rules,
+                text=key,
+                bg="#fee2e2",
+                fg="#991b1b",
+                font=("Segoe UI", 10, "bold"),
+                relief="ridge",
+                bd=1,
+                padx=12,
+                pady=4,
+            )
+            badge.grid(row=1, column=idx, padx=4, sticky="w")
 
         metrics = ttk.LabelFrame(self, text="Live Metrics", padding=12)
         metrics.grid(row=2, column=0, padx=12, pady=(8, 0), sticky="ew")

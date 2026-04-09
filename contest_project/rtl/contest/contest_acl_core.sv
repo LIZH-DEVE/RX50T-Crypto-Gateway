@@ -48,11 +48,15 @@ module contest_acl_core (
         end
 
         // Current default rules:
-        // X / Y / Z / W => block.
+        // X / Y / Z / W / P / R / T / U => block.
         rule_table_q[8'h58] = 8'h01;
         rule_table_q[8'h59] = 8'h01;
         rule_table_q[8'h5A] = 8'h01;
         rule_table_q[8'h57] = 8'h01;
+        rule_table_q[8'h50] = 8'h01;
+        rule_table_q[8'h52] = 8'h01;
+        rule_table_q[8'h54] = 8'h01;
+        rule_table_q[8'h55] = 8'h01;
     end
 
     always @(posedge clk) begin
