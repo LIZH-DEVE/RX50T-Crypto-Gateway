@@ -4,10 +4,12 @@ from crypto_gateway_protocol import (
     AclRuleCounters,
     StatsCounters,
     build_frame,
+    case_aes_four_block_vector,
     case_aes_known_vector,
     case_block_ascii,
     case_query_rule_stats,
     case_query_stats,
+    case_sm4_four_block_vector,
     extract_first_payload_key,
     parse_rule_stats_response,
     parse_stats_response,
@@ -46,15 +48,25 @@ class CryptoGatewayProtocolTests(unittest.TestCase):
         )
         self.assertEqual(case.response_len, 10)
 
-    def test_split_blocks_prefers_32_then_16(self) -> None:
-        payload = bytes(range(48))
+    def test_split_blocks_prefers_64_then_32_then_16(self) -> None:
+        payload = bytes(range(112))
         chunks = split_blocks_for_transport(payload)
-        self.assertEqual([len(chunk) for chunk in chunks], [32, 16])
+        self.assertEqual([len(chunk) for chunk in chunks], [64, 32, 16])
         self.assertEqual(b"".join(chunks), payload)
 
     def test_aes_known_vector_frame_has_explicit_selector(self) -> None:
         case = case_aes_known_vector()
         self.assertEqual(case.tx[:3], bytes([0x55, 0x11, 0x41]))
+
+    def test_aes_64b_vector_frame_has_explicit_selector(self) -> None:
+        case = case_aes_four_block_vector()
+        self.assertEqual(case.tx[:3], bytes([0x55, 0x41, 0x41]))
+        self.assertEqual(case.response_len, 64)
+
+    def test_sm4_64b_vector_response_len(self) -> None:
+        case = case_sm4_four_block_vector()
+        self.assertEqual(case.tx[:2], bytes([0x55, 0x40]))
+        self.assertEqual(case.response_len, 64)
 
     def test_extract_first_payload_key_for_acl_probe(self) -> None:
         case = case_block_ascii("XYZ")

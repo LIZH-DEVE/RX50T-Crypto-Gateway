@@ -11,7 +11,8 @@ module contest_acl_core (
 
     output reg        acl_valid,
     output reg [7:0]  acl_data,
-    output reg        acl_last
+    output reg        acl_last,
+    output reg        acl_blocked
 );
 
     localparam [2:0] ST_IDLE      = 3'd0;
@@ -87,10 +88,12 @@ module contest_acl_core (
             acl_valid         <= 1'b0;
             acl_data          <= 8'd0;
             acl_last          <= 1'b0;
+            acl_blocked       <= 1'b0;
         end else begin
             acl_valid <= 1'b0;
             acl_data  <= 8'd0;
             acl_last  <= 1'b0;
+            acl_blocked <= 1'b0;
 
             if (parser_valid && parser_last && (state_q != ST_IDLE) && (state_q != ST_LOOKUP) && (state_q != ST_PASS)) begin
                 drop_seen_last_q <= 1'b1;
@@ -154,6 +157,7 @@ module contest_acl_core (
                     acl_valid <= 1'b1;
                     acl_data  <= ASCII_D;
                     acl_last  <= 1'b0;
+                    acl_blocked <= 1'b1;
                     state_q   <= ST_DROP_NL;
                 end
 

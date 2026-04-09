@@ -22,7 +22,7 @@ The current validated mainline is:
 - `8` `8-bit` per-rule ACL hardware counters
 - stats query over UART
 - rule-stats query over UART
-- single-block and two-block encryption
+- `16B / 32B / 64B` continuous encryption
 
 This mainline now has:
 - simulation evidence
@@ -120,13 +120,13 @@ Purpose:
 
 Current boundary:
 - fixed internal test keys
-- supports `16B` and `32B` payload paths
+- supports `16B`, `32B`, and `64B` payload paths
 - no dynamic key download
 - no hardware padding
 - short control frames like `D\n` and `E\n` bypass encryption
 
 Internal phases:
-- `S_RX_GATHER`: gather the full frame, currently up to `32B`
+- `S_RX_GATHER`: gather the full frame, currently up to `64B`
 - `S_ENCRYPT`: drive the crypto core block by block
 - `S_TX_SCATTER`: emit ciphertext one byte at a time
 
@@ -185,6 +185,9 @@ Purpose:
 - `LEN = 32`
 - payload is two consecutive `SM4` plaintext blocks
 
+- `LEN = 64`
+- payload is four consecutive `SM4` plaintext blocks
+
 ### Explicit AES Mode
 
 - `LEN = 17`
@@ -195,6 +198,10 @@ Purpose:
 - first payload byte = `0x41 ('A')`
 - remaining `32B` = two consecutive AES plaintext blocks
 
+- `LEN = 65`
+- first payload byte = `0x41 ('A')`
+- remaining `64B` = four consecutive AES plaintext blocks
+
 ### Explicit SM4 Mode
 
 - `LEN = 17`
@@ -204,6 +211,10 @@ Purpose:
 - `LEN = 33`
 - first payload byte = `0x53 ('S')`
 - remaining `32B` = two consecutive SM4 plaintext blocks
+
+- `LEN = 65`
+- first payload byte = `0x53 ('S')`
+- remaining `64B` = four consecutive SM4 plaintext blocks
 
 ### Error and Block Replies
 
@@ -253,6 +264,8 @@ Verified on `COM12`:
 - `AES`
 - `32B SM4`
 - `32B AES`
+- `64B SM4`
+- `64B AES`
 - latest BRAM-backed ACL smoke test
 
 Representative real-board results:
@@ -273,6 +286,14 @@ Representative real-board results:
   - input: `55 21 41 00 11 22 33 44 55 66 77 88 99 aa bb cc dd ee ff ff ee dd cc bb aa 99 88 77 66 55 44 33 22 11 00`
   - output: `69 c4 e0 d8 6a 7b 04 30 d8 cd b7 80 70 b4 c5 5a 1b 87 23 78 79 5f 4f fd 77 28 55 fc 87 ca 96 4d`
 
+- `SM4` four-block vector
+  - input: `55 40 01 23 45 67 89 ab cd ef fe dc ba 98 76 54 32 10 00 11 22 33 44 55 66 77 88 99 aa bb cc dd ee ff 01 23 45 67 89 ab cd ef fe dc ba 98 76 54 32 10 00 11 22 33 44 55 66 77 88 99 aa bb cc dd ee ff`
+  - output: `68 1e df 34 d2 06 96 5e 86 b3 e9 4f 53 6e 42 46 09 32 5c 48 53 83 2d cb 93 37 a5 98 4f 67 1b 9a 68 1e df 34 d2 06 96 5e 86 b3 e9 4f 53 6e 42 46 09 32 5c 48 53 83 2d cb 93 37 a5 98 4f 67 1b 9a`
+
+- `AES` four-block vector
+  - input: `55 41 41 00 11 22 33 44 55 66 77 88 99 aa bb cc dd ee ff ff ee dd cc bb aa 99 88 77 66 55 44 33 22 11 00 00 11 22 33 44 55 66 77 88 99 aa bb cc dd ee ff ff ee dd cc bb aa 99 88 77 66 55 44 33 22 11 00`
+  - output: `69 c4 e0 d8 6a 7b 04 30 d8 cd b7 80 70 b4 c5 5a 1b 87 23 78 79 5f 4f fd 77 28 55 fc 87 ca 96 4d 69 c4 e0 d8 6a 7b 04 30 d8 cd b7 80 70 b4 c5 5a 1b 87 23 78 79 5f 4f fd 77 28 55 fc 87 ca 96 4d`
+
 - initial stats query
   - input: `55 01 3F`
   - output: `53 00 00 00 00 00 0A`
@@ -281,6 +302,11 @@ Representative real-board results:
   - after: `ACL block + SM4 + AES + 32B SM4 + 32B AES + invalid selector`
   - input: `55 01 3F`
   - output: `53 05 01 02 02 01 0A`
+
+- fresh `64B` multiblock stats query
+  - after: `64B SM4 + 64B AES`
+  - input: `55 01 3F`
+  - output: `53 02 00 01 01 00 0A`
 
 - fresh BRAM-backed ACL smoke test
   - initial stats:
@@ -350,12 +376,12 @@ It does not expose runtime ACL table writes.
 ## 6. Current Implementation Numbers
 
 `rx50t_uart_crypto_probe_board_top` implementation results:
-- `WNS = 6.104ns`
-- `WHS = 0.094ns`
+- `WNS = 5.691ns`
+- `WHS = 0.048ns`
 - `DRC violations = 0`
-- `Slice LUTs = 4445`
-- `Slice Registers = 5048`
-- `Slice = 1856`
+- `Slice LUTs = 6327`
+- `Slice Registers = 6238`
+- `Slice = 2411`
 - `Bonded IOB = 4`
 - `RAMB18 = 1`
 - `DSPs = 0`
@@ -401,7 +427,7 @@ This is why the GUI now schedules a short delayed rule-counter refresh after ACL
 Not part of the current baseline:
 - dynamic key download
 - `CBC`
-- payloads longer than `32B`
+- payloads longer than `64B`
 - `DMA / DDR / PBM`
 - `Host/PS`
 - full `Ethernet/IP/UDP` stack
@@ -416,7 +442,7 @@ The current `RX50T` version is now a real pure-`PL` security datapath with verif
 and it already supports:
 - multi-rule ACL
 - AES/SM4 mode switching
-- `16B / 32B` continuous encryption
+- `16B / 32B / 64B` continuous encryption
 - protocol error fallback
 - aggregate stats query and counter readback
 - board-side per-rule ACL counter readback

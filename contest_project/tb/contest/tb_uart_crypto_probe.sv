@@ -15,11 +15,35 @@ module tb_uart_crypto_probe;
         128'h681edf34d206965e86b3e94f536e4246,
         128'h09325c4853832dcb9337a5984f671b9a
     };
+    localparam logic [511:0] SM4_4BLOCK_PT = {
+        128'h0123456789abcdeffedcba9876543210,
+        128'h00112233445566778899aabbccddeeff,
+        128'h0123456789abcdeffedcba9876543210,
+        128'h00112233445566778899aabbccddeeff
+    };
+    localparam logic [511:0] SM4_4BLOCK_CT = {
+        128'h681edf34d206965e86b3e94f536e4246,
+        128'h09325c4853832dcb9337a5984f671b9a,
+        128'h681edf34d206965e86b3e94f536e4246,
+        128'h09325c4853832dcb9337a5984f671b9a
+    };
     localparam logic [255:0] AES_2BLOCK_PT = {
         128'h00112233445566778899aabbccddeeff,
         128'hffeeddccbbaa99887766554433221100
     };
     localparam logic [255:0] AES_2BLOCK_CT = {
+        128'h69c4e0d86a7b0430d8cdb78070b4c55a,
+        128'h1b872378795f4ffd772855fc87ca964d
+    };
+    localparam logic [511:0] AES_4BLOCK_PT = {
+        128'h00112233445566778899aabbccddeeff,
+        128'hffeeddccbbaa99887766554433221100,
+        128'h00112233445566778899aabbccddeeff,
+        128'hffeeddccbbaa99887766554433221100
+    };
+    localparam logic [511:0] AES_4BLOCK_CT = {
+        128'h69c4e0d86a7b0430d8cdb78070b4c55a,
+        128'h1b872378795f4ffd772855fc87ca964d,
         128'h69c4e0d86a7b0430d8cdb78070b4c55a,
         128'h1b872378795f4ffd772855fc87ca964d
     };
@@ -205,6 +229,43 @@ module tb_uart_crypto_probe;
 
         #(20 * BIT_PERIODNS);
 
+        // Default 64-byte frame -> four-block SM4 ciphertext.
+        fork
+            begin
+                uart_send_byte(8'h55);
+                uart_send_byte(8'd64);
+                for (int send_idx = 0; send_idx < 64; send_idx = send_idx + 1) begin
+                    uart_send_byte(SM4_4BLOCK_PT[511 - (send_idx*8) -: 8]);
+                end
+            end
+            begin
+                for (int recv_idx = 0; recv_idx < 64; recv_idx = recv_idx + 1) begin
+                    uart_expect_byte(SM4_4BLOCK_CT[511 - (recv_idx*8) -: 8]);
+                end
+            end
+        join
+
+        #(20 * BIT_PERIODNS);
+
+        // Explicit AES mode: 'A' + 64-byte plaintext -> four-block AES ciphertext.
+        fork
+            begin
+                uart_send_byte(8'h55);
+                uart_send_byte(8'd65);
+                uart_send_byte(8'h41);
+                for (int send_idx = 0; send_idx < 64; send_idx = send_idx + 1) begin
+                    uart_send_byte(AES_4BLOCK_PT[511 - (send_idx*8) -: 8]);
+                end
+            end
+            begin
+                for (int recv_idx = 0; recv_idx < 64; recv_idx = recv_idx + 1) begin
+                    uart_expect_byte(AES_4BLOCK_CT[511 - (recv_idx*8) -: 8]);
+                end
+            end
+        join
+
+        #(20 * BIT_PERIODNS);
+
         // New default BRAM-backed rule: P should also block.
         fork
             begin
@@ -291,10 +352,10 @@ module tb_uart_crypto_probe;
             end
             begin
                 uart_expect_byte(8'h53);
-                uart_expect_byte(8'h07);
+                uart_expect_byte(8'h09);
                 uart_expect_byte(8'h03);
-                uart_expect_byte(8'h02);
-                uart_expect_byte(8'h02);
+                uart_expect_byte(8'h03);
+                uart_expect_byte(8'h03);
                 uart_expect_byte(8'h01);
                 uart_expect_byte(8'h0A);
             end

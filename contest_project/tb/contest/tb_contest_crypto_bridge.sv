@@ -12,11 +12,35 @@ module tb_contest_crypto_bridge;
         128'h681edf34d206965e86b3e94f536e4246,
         128'h09325c4853832dcb9337a5984f671b9a
     };
+    localparam logic [511:0] SM4_4BLOCK_PT = {
+        128'h0123456789abcdeffedcba9876543210,
+        128'h00112233445566778899aabbccddeeff,
+        128'h0123456789abcdeffedcba9876543210,
+        128'h00112233445566778899aabbccddeeff
+    };
+    localparam logic [511:0] SM4_4BLOCK_CT = {
+        128'h681edf34d206965e86b3e94f536e4246,
+        128'h09325c4853832dcb9337a5984f671b9a,
+        128'h681edf34d206965e86b3e94f536e4246,
+        128'h09325c4853832dcb9337a5984f671b9a
+    };
     localparam logic [255:0] AES_2BLOCK_PT = {
         128'h00112233445566778899aabbccddeeff,
         128'hffeeddccbbaa99887766554433221100
     };
     localparam logic [255:0] AES_2BLOCK_CT = {
+        128'h69c4e0d86a7b0430d8cdb78070b4c55a,
+        128'h1b872378795f4ffd772855fc87ca964d
+    };
+    localparam logic [511:0] AES_4BLOCK_PT = {
+        128'h00112233445566778899aabbccddeeff,
+        128'hffeeddccbbaa99887766554433221100,
+        128'h00112233445566778899aabbccddeeff,
+        128'hffeeddccbbaa99887766554433221100
+    };
+    localparam logic [511:0] AES_4BLOCK_CT = {
+        128'h69c4e0d86a7b0430d8cdb78070b4c55a,
+        128'h1b872378795f4ffd772855fc87ca964d,
         128'h69c4e0d86a7b0430d8cdb78070b4c55a,
         128'h1b872378795f4ffd772855fc87ca964d
     };
@@ -148,6 +172,30 @@ module tb_contest_crypto_bridge;
 
         for (idx = 0; idx < 32; idx = idx + 1) begin
             expect_bridge_byte(AES_2BLOCK_CT[255 - (idx*8) -: 8], (idx == 31));
+        end
+
+        repeat (20) @(posedge clk);
+
+        // 64-byte SM4 frame should encrypt four blocks and emit 64 ciphertext bytes.
+        algo_sel = 1'b0;
+        for (idx = 0; idx < 64; idx = idx + 1) begin
+            send_acl_byte(SM4_4BLOCK_PT[511 - (idx*8) -: 8], (idx == 63));
+        end
+
+        for (idx = 0; idx < 64; idx = idx + 1) begin
+            expect_bridge_byte(SM4_4BLOCK_CT[511 - (idx*8) -: 8], (idx == 63));
+        end
+
+        repeat (20) @(posedge clk);
+
+        // 64-byte AES frame should encrypt four blocks and emit 64 ciphertext bytes.
+        algo_sel = 1'b1;
+        for (idx = 0; idx < 64; idx = idx + 1) begin
+            send_acl_byte(AES_4BLOCK_PT[511 - (idx*8) -: 8], (idx == 63));
+        end
+
+        for (idx = 0; idx < 64; idx = idx + 1) begin
+            expect_bridge_byte(AES_4BLOCK_CT[511 - (idx*8) -: 8], (idx == 63));
         end
 
         $display("contest_crypto_bridge test passed.");

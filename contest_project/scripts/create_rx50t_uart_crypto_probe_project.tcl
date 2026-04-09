@@ -1,4 +1,8 @@
-set project_dir [file normalize "D:/FPGAhanjia/jichuangsai/contest_project/build/rx50t_uart_crypto_probe"]
+if {[info exists ::env(RX50T_CRYPTO_BUILD_DIR)] && $::env(RX50T_CRYPTO_BUILD_DIR) ne ""} {
+    set project_dir [file normalize $::env(RX50T_CRYPTO_BUILD_DIR)]
+} else {
+    set project_dir [file normalize "D:/FPGAhanjia/jichuangsai/contest_project/build/rx50t_uart_crypto_probe"]
+}
 file mkdir $project_dir
 
 create_project rx50t_uart_crypto_probe $project_dir -part xc7a50tfgg484-1 -force

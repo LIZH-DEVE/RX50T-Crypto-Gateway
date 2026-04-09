@@ -53,6 +53,7 @@ module contest_uart_crypto_probe #(
     wire       acl_valid;
     wire [7:0] acl_data;
     wire       acl_last;
+    wire       acl_blocked;
 
     reg        bridge_in_valid_q;
     reg [7:0]  bridge_in_data_q;
@@ -130,7 +131,7 @@ module contest_uart_crypto_probe #(
 
     contest_parser_core #(
         .SOF_BYTE         (8'h55),
-        .MAX_PAYLOAD_BYTES(64)
+        .MAX_PAYLOAD_BYTES(128)
     ) u_parser (
         .i_clk          (i_clk),
         .i_rst_n        (i_rst_n),
@@ -155,7 +156,8 @@ module contest_uart_crypto_probe #(
         .parser_last     (acl_feed_last_q),
         .acl_valid       (acl_valid),
         .acl_data        (acl_data),
-        .acl_last        (acl_last)
+        .acl_last        (acl_last),
+        .acl_blocked     (acl_blocked)
     );
 
     contest_crypto_bridge u_bridge (
@@ -261,7 +263,7 @@ module contest_uart_crypto_probe #(
                         frame_query_q <= 1'b1;
                     end else if (parser_payload_len == 8'd1 && parser_payload_byte == ASCII_RULE) begin
                         frame_rule_query_q <= 1'b1;
-                    end else if ((parser_payload_len == 8'd17) || (parser_payload_len == 8'd33)) begin
+                    end else if ((parser_payload_len == 8'd17) || (parser_payload_len == 8'd33) || (parser_payload_len == 8'd65)) begin
                         if (parser_payload_byte == MODE_AES) begin
                             frame_algo_sel_q <= ALG_AES;
                         end else if (parser_payload_byte == MODE_SM4) begin
@@ -318,7 +320,7 @@ module contest_uart_crypto_probe #(
                 frame_rule_query_q    <= 1'b0;
             end
 
-            if (acl_valid && (acl_data == 8'h44) && !acl_last) begin
+            if (acl_blocked) begin
                 acl_block_seen_q <= 1'b1;
             end
 

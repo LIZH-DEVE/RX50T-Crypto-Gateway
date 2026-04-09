@@ -26,8 +26,8 @@ module contest_crypto_bridge (
     localparam [1:0] ST_TX_SCATTER = 2'd2;
 
     localparam integer BLOCK_BYTES = 16;
-    localparam integer MAX_BYTES   = 32;
-    localparam integer MAX_BLOCKS  = 2;
+    localparam integer MAX_BYTES   = 64;
+    localparam integer MAX_BLOCKS  = 4;
 
     localparam [2:0] AES_BOOT_INIT      = 3'd0;
     localparam [2:0] AES_BOOT_WAIT_BUSY = 3'd1;
@@ -38,14 +38,14 @@ module contest_crypto_bridge (
     localparam [2:0] AES_RUN_WAIT_DONE  = 3'd6;
 
     reg [1:0]   state_q;
-    reg [255:0] gather_shift_q;
-    reg [5:0]   gather_count_q;
-    reg [255:0] frame_data_q;
-    reg [255:0] result_shift_q;
-    reg [255:0] tx_shift_q;
-    reg [5:0]   tx_count_q;
-    reg [1:0]   block_count_q;
-    reg [1:0]   block_index_q;
+    reg [511:0] gather_shift_q;
+    reg [6:0]   gather_count_q;
+    reg [511:0] frame_data_q;
+    reg [511:0] result_shift_q;
+    reg [511:0] tx_shift_q;
+    reg [6:0]   tx_count_q;
+    reg [2:0]   block_count_q;
+    reg [2:0]   block_index_q;
     reg [127:0] crypto_block_q;
     reg         active_algo_q;
 
@@ -67,14 +67,34 @@ module contest_crypto_bridge (
     wire [127:0] aes_result;
 
     function automatic [127:0] block_from_frame(
-        input [255:0] frame,
-        input [1:0]   idx
+        input [511:0] frame,
+        input [2:0]   idx
     );
         begin
             case (idx)
-                2'd0: block_from_frame = frame[255:128];
-                2'd1: block_from_frame = frame[127:0];
+                3'd0: block_from_frame = frame[511:384];
+                3'd1: block_from_frame = frame[383:256];
+                3'd2: block_from_frame = frame[255:128];
+                3'd3: block_from_frame = frame[127:0];
                 default: block_from_frame = 128'd0;
+            endcase
+        end
+    endfunction
+
+    function automatic [511:0] store_block_into_frame(
+        input [511:0] frame,
+        input [2:0]   idx,
+        input [127:0] block
+    );
+        begin
+            store_block_into_frame = frame;
+            case (idx)
+                3'd0: store_block_into_frame[511:384] = block;
+                3'd1: store_block_into_frame[383:256] = block;
+                3'd2: store_block_into_frame[255:128] = block;
+                3'd3: store_block_into_frame[127:0]   = block;
+                default: begin
+                end
             endcase
         end
     endfunction
@@ -116,20 +136,21 @@ module contest_crypto_bridge (
     );
 
     always @(posedge clk or negedge rst_n) begin
-        reg [255:0] next_shift;
-        reg [255:0] aligned_frame;
-        reg [5:0]   next_count;
-        reg [1:0]   next_block_count;
+        reg [511:0] next_shift;
+        reg [511:0] aligned_frame;
+        reg [511:0] next_result_shift;
+        reg [6:0]   next_count;
+        reg [2:0]   next_block_count;
         if (!rst_n) begin
             state_q              <= ST_RX_GATHER;
-            gather_shift_q       <= 256'd0;
-            gather_count_q       <= 6'd0;
-            frame_data_q         <= 256'd0;
-            result_shift_q       <= 256'd0;
-            tx_shift_q           <= 256'd0;
-            tx_count_q           <= 6'd0;
-            block_count_q        <= 2'd0;
-            block_index_q        <= 2'd0;
+            gather_shift_q       <= 512'd0;
+            gather_count_q       <= 7'd0;
+            frame_data_q         <= 512'd0;
+            result_shift_q       <= 512'd0;
+            tx_shift_q           <= 512'd0;
+            tx_count_q           <= 7'd0;
+            block_count_q        <= 3'd0;
+            block_index_q        <= 3'd0;
             crypto_block_q       <= 128'd0;
             active_algo_q        <= ALG_SM4;
             sm4_key_sent_q       <= 1'b0;
@@ -210,28 +231,28 @@ module contest_crypto_bridge (
                     sm4_valid_burst_q <= 3'd0;
 
                     if (acl_valid) begin
-                        next_shift = {gather_shift_q[247:0], acl_data};
-                        next_count = gather_count_q + 6'd1;
+                        next_shift = {gather_shift_q[503:0], acl_data};
+                        next_count = gather_count_q + 7'd1;
 
                         if (next_count <= MAX_BYTES) begin
                             if (acl_last && ((next_count < BLOCK_BYTES) || ((next_count % BLOCK_BYTES) != 0))) begin
                                 tx_shift_q     <= next_shift << ((MAX_BYTES - next_count) * 8);
                                 tx_count_q     <= next_count;
-                                gather_shift_q <= 256'd0;
-                                gather_count_q <= 6'd0;
+                                gather_shift_q <= 512'd0;
+                                gather_count_q <= 7'd0;
                                 state_q        <= ST_TX_SCATTER;
-                            end else if (acl_last && (next_count == BLOCK_BYTES || next_count == (2 * BLOCK_BYTES))) begin
-                                aligned_frame   = next_shift << ((MAX_BYTES - next_count) * 8);
+                            end else if (acl_last && ((next_count % BLOCK_BYTES) == 0)) begin
+                                aligned_frame    = next_shift << ((MAX_BYTES - next_count) * 8);
                                 next_block_count = next_count / BLOCK_BYTES;
-                                active_algo_q   <= i_algo_sel;
-                                frame_data_q    <= aligned_frame;
-                                result_shift_q  <= 256'd0;
-                                block_count_q   <= next_block_count;
-                                block_index_q   <= 2'd0;
-                                crypto_block_q  <= aligned_frame[255:128];
-                                gather_shift_q  <= 256'd0;
-                                gather_count_q  <= 6'd0;
-                                state_q         <= ST_ENCRYPT;
+                                active_algo_q    <= i_algo_sel;
+                                frame_data_q     <= aligned_frame;
+                                result_shift_q   <= 512'd0;
+                                block_count_q    <= next_block_count;
+                                block_index_q    <= 3'd0;
+                                crypto_block_q   <= aligned_frame[511:384];
+                                gather_shift_q   <= 512'd0;
+                                gather_count_q   <= 7'd0;
+                                state_q          <= ST_ENCRYPT;
                             end else begin
                                 gather_shift_q <= next_shift;
                                 gather_count_q <= next_count;
@@ -258,46 +279,36 @@ module contest_crypto_bridge (
                         end
 
                         if (sm4_done) begin
-                            if (block_index_q == 2'd0) begin
-                                result_shift_q[255:128] <= sm4_result;
-                            end else begin
-                                result_shift_q[127:0] <= sm4_result;
-                            end
+                            next_result_shift = store_block_into_frame(result_shift_q, block_index_q, sm4_result);
+                            result_shift_q <= next_result_shift;
 
                             sm4_start_seen_q  <= 1'b0;
                             sm4_valid_burst_q <= 3'd0;
 
-                            if ((block_index_q + 2'd1) < block_count_q) begin
-                                block_index_q  <= block_index_q + 2'd1;
-                                crypto_block_q <= block_from_frame(frame_data_q, block_index_q + 2'd1);
+                            if ((block_index_q + 3'd1) < block_count_q) begin
+                                block_index_q         <= block_index_q + 3'd1;
+                                crypto_block_q        <= block_from_frame(frame_data_q, block_index_q + 3'd1);
                                 sm4_wait_done_clear_q <= 1'b1;
                             end else begin
-                                tx_shift_q <= (block_count_q == 2'd1)
-                                    ? {sm4_result, 128'd0}
-                                    : {result_shift_q[255:128], sm4_result};
+                                tx_shift_q <= next_result_shift;
                                 tx_count_q <= block_count_q * BLOCK_BYTES;
                                 state_q    <= ST_TX_SCATTER;
                             end
                         end
                     end else begin
-                        sm4_start_seen_q  <= 1'b0;
+                        sm4_start_seen_q      <= 1'b0;
                         sm4_wait_done_clear_q <= 1'b0;
-                        sm4_valid_burst_q <= 3'd0;
+                        sm4_valid_burst_q     <= 3'd0;
 
                         if (aes_result_valid && (aes_state_q == AES_RUN_WAIT_DONE)) begin
-                            if (block_index_q == 2'd0) begin
-                                result_shift_q[255:128] <= aes_result;
-                            end else begin
-                                result_shift_q[127:0] <= aes_result;
-                            end
+                            next_result_shift = store_block_into_frame(result_shift_q, block_index_q, aes_result);
+                            result_shift_q <= next_result_shift;
 
-                            if ((block_index_q + 2'd1) < block_count_q) begin
-                                block_index_q  <= block_index_q + 2'd1;
-                                crypto_block_q <= block_from_frame(frame_data_q, block_index_q + 2'd1);
+                            if ((block_index_q + 3'd1) < block_count_q) begin
+                                block_index_q  <= block_index_q + 3'd1;
+                                crypto_block_q <= block_from_frame(frame_data_q, block_index_q + 3'd1);
                             end else begin
-                                tx_shift_q <= (block_count_q == 2'd1)
-                                    ? {aes_result, 128'd0}
-                                    : {result_shift_q[255:128], aes_result};
+                                tx_shift_q <= next_result_shift;
                                 tx_count_q <= block_count_q * BLOCK_BYTES;
                                 state_q    <= ST_TX_SCATTER;
                             end
@@ -306,23 +317,23 @@ module contest_crypto_bridge (
                 end
 
                 ST_TX_SCATTER: begin
-                    if (!bridge_valid && (tx_count_q != 6'd0)) begin
+                    if (!bridge_valid && (tx_count_q != 7'd0)) begin
                         bridge_valid <= 1'b1;
-                        bridge_data  <= tx_shift_q[255:248];
-                        bridge_last  <= (tx_count_q == 6'd1);
+                        bridge_data  <= tx_shift_q[511:504];
+                        bridge_last  <= (tx_count_q == 7'd1);
                     end else if (bridge_valid && uart_tx_ready) begin
                         bridge_valid <= 1'b0;
-                        tx_shift_q   <= {tx_shift_q[247:0], 8'h00};
-                        tx_count_q   <= tx_count_q - 6'd1;
+                        tx_shift_q   <= {tx_shift_q[503:0], 8'h00};
+                        tx_count_q   <= tx_count_q - 7'd1;
 
-                        if (tx_count_q == 6'd1) begin
-                            bridge_data  <= 8'd0;
-                            bridge_last  <= 1'b0;
-                            frame_data_q <= 256'd0;
-                            result_shift_q <= 256'd0;
-                            block_count_q <= 2'd0;
-                            block_index_q <= 2'd0;
-                            state_q      <= ST_RX_GATHER;
+                        if (tx_count_q == 7'd1) begin
+                            bridge_data   <= 8'd0;
+                            bridge_last   <= 1'b0;
+                            frame_data_q  <= 512'd0;
+                            result_shift_q<= 512'd0;
+                            block_count_q <= 3'd0;
+                            block_index_q <= 3'd0;
+                            state_q       <= ST_RX_GATHER;
                         end
                     end
                 end

@@ -11,12 +11,14 @@ except ImportError as exc:  # pragma: no cover
 from crypto_gateway_protocol import (
     AclRuleCounters,
     StatsCounters,
+    case_aes_four_block_vector,
     case_aes_known_vector,
     case_aes_two_block_vector,
     case_block_ascii,
     case_invalid_selector,
     case_query_rule_stats,
     case_query_stats,
+    case_sm4_four_block_vector,
     case_sm4_known_vector,
     case_sm4_two_block_vector,
     format_hex,
@@ -47,6 +49,16 @@ def main() -> int:
         "--aes-two-block-vector",
         action="store_true",
         help="Send the explicit AES selector plus a fixed 32-byte plaintext",
+    )
+    parser.add_argument(
+        "--sm4-four-block-vector",
+        action="store_true",
+        help="Send a fixed 64-byte SM4 plaintext and expect 64 ciphertext bytes",
+    )
+    parser.add_argument(
+        "--aes-four-block-vector",
+        action="store_true",
+        help="Send the explicit AES selector plus a fixed 64-byte plaintext",
     )
     parser.add_argument(
         "--block-ascii",
@@ -85,6 +97,8 @@ def main() -> int:
             args.aes_known_vector,
             args.sm4_two_block_vector,
             args.aes_two_block_vector,
+            args.sm4_four_block_vector,
+            args.aes_four_block_vector,
             args.block_ascii is not None,
             args.invalid_selector,
             args.query_stats,
@@ -95,8 +109,9 @@ def main() -> int:
     if mode_count != 1:
         raise SystemExit(
             "Choose exactly one of --sm4-known-vector, --aes-known-vector, "
-            "--sm4-two-block-vector, --aes-two-block-vector, --block-ascii, "
-            "--invalid-selector, --query-stats, or --query-rule-stats"
+            "--sm4-two-block-vector, --aes-two-block-vector, --sm4-four-block-vector, "
+            "--aes-four-block-vector, --block-ascii, --invalid-selector, "
+            "--query-stats, or --query-rule-stats"
         )
 
     if args.sm4_known_vector:
@@ -107,6 +122,10 @@ def main() -> int:
         case = case_sm4_two_block_vector()
     elif args.aes_two_block_vector:
         case = case_aes_two_block_vector()
+    elif args.sm4_four_block_vector:
+        case = case_sm4_four_block_vector()
+    elif args.aes_four_block_vector:
+        case = case_aes_four_block_vector()
     elif args.invalid_selector:
         case = case_invalid_selector()
     elif args.query_stats:

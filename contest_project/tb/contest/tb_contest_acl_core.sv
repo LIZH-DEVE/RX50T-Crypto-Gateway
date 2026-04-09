@@ -11,6 +11,7 @@ module tb_contest_acl_core;
     wire acl_valid;
     wire [7:0] acl_data;
     wire acl_last;
+    wire acl_blocked;
 
     reg [7:0] capture_data [0:31];
     reg       capture_last [0:31];
@@ -25,7 +26,8 @@ module tb_contest_acl_core;
         .parser_last    (parser_last),
         .acl_valid      (acl_valid),
         .acl_data       (acl_data),
-        .acl_last       (acl_last)
+        .acl_last       (acl_last),
+        .acl_blocked    (acl_blocked)
     );
 
     initial begin

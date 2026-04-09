@@ -19,6 +19,10 @@ AES128_PT2 = bytes.fromhex("ff ee dd cc bb aa 99 88 77 66 55 44 33 22 11 00")
 AES128_CT2 = bytes.fromhex("1b 87 23 78 79 5f 4f fd 77 28 55 fc 87 ca 96 4d")
 SM4_PT2 = bytes.fromhex("00 11 22 33 44 55 66 77 88 99 aa bb cc dd ee ff")
 SM4_CT2 = bytes.fromhex("09 32 5c 48 53 83 2d cb 93 37 a5 98 4f 67 1b 9a")
+AES128_PT4 = AES128_PT + AES128_PT2 + AES128_PT + AES128_PT2
+AES128_CT4 = AES128_CT + AES128_CT2 + AES128_CT + AES128_CT2
+SM4_PT4 = SM4_PT + SM4_PT2 + SM4_PT + SM4_PT2
+SM4_CT4 = SM4_CT + SM4_CT2 + SM4_CT + SM4_CT2
 DEFAULT_ACL_RULES = ("X", "Y", "Z", "W", "P", "R", "T", "U")
 
 
@@ -96,8 +100,8 @@ class ProbeResult:
 def build_frame(payload: bytes) -> bytes:
     if not payload:
         raise ValueError("payload must not be empty")
-    if len(payload) > 64:
-        raise ValueError("payload length must be <= 64 bytes")
+    if len(payload) > 128:
+        raise ValueError("payload length must be <= 128 bytes")
     return bytes([0x55, len(payload)]) + payload
 
 
@@ -148,7 +152,12 @@ def split_blocks_for_transport(payload: bytes) -> list[bytes]:
     index = 0
     while index < len(payload):
         remaining = len(payload) - index
-        chunk_len = 32 if remaining >= 32 else 16
+        if remaining >= 64:
+            chunk_len = 64
+        elif remaining >= 32:
+            chunk_len = 32
+        else:
+            chunk_len = 16
         chunks.append(payload[index : index + chunk_len])
         index += chunk_len
     return chunks
@@ -204,6 +213,26 @@ def case_invalid_selector() -> ProbeCase:
     )
 
 
+def case_sm4_four_block_vector() -> ProbeCase:
+    return ProbeCase(
+        name="SM4 64B Vector",
+        tx=build_frame(SM4_PT4),
+        response_len=len(SM4_CT4),
+        expected=SM4_CT4,
+        description="Four-block SM4 known vector",
+    )
+
+
+def case_aes_four_block_vector() -> ProbeCase:
+    return ProbeCase(
+        name="AES 64B Vector",
+        tx=build_frame(b"A" + AES128_PT4),
+        response_len=len(AES128_CT4),
+        expected=AES128_CT4,
+        description="Four-block AES known vector",
+    )
+
+
 def case_block_ascii(text: str = "XYZ") -> ProbeCase:
     payload = text.encode("ascii")
     return ProbeCase(
@@ -241,8 +270,8 @@ def case_encrypt_block(algo: str, plaintext: bytes) -> ProbeCase:
     normalized = algo.strip().upper()
     if normalized not in {"AES", "SM4"}:
         raise ValueError("algo must be AES or SM4")
-    if len(plaintext) not in {16, 32}:
-        raise ValueError("plaintext length must be 16 or 32 bytes")
+    if len(plaintext) not in {16, 32, 64}:
+        raise ValueError("plaintext length must be 16, 32, or 64 bytes")
     if normalized == "AES":
         tx = build_frame(b"A" + plaintext)
     else:
