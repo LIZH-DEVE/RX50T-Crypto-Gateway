@@ -1,10 +1,10 @@
-# RX50T 架构总览
+# RX50T Architecture Overview
 
-## 1. 总体架构
+## 1. Overall Architecture
 
-当前 `RX50T` 架构不再沿用原 `AX7020/Zynq` 的异构 SoC 模式，而是裁剪为纯 `PL` 版本。
+The current `RX50T` architecture is a trimmed pure-`PL` design, not a continuation of the original `AX7020/Zynq` heterogeneous SoC structure.
 
-整体通路为：
+Main datapath:
 
 ```text
 UART RX
@@ -15,7 +15,7 @@ UART RX
 -> UART TX
 ```
 
-辅助控制路径为：
+Auxiliary control/visibility path:
 
 ```text
 Parser / Top Control
@@ -25,180 +25,178 @@ Parser / Top Control
 -> UART TX
 ```
 
-## 2. 各模块关系
+## 2. Module Relationships
 
 ### UART RX
 
-作用：
+Role:
+- receive bytes from the host PC
+- turn asynchronous UART input into an internal synchronous byte stream
 
-- 接收上位机串口数据
-- 将异步串口输入转换成内部同步字节流
-
-输出给：
-
+Feeds:
 - `Parser`
 
 ### Parser
 
-作用：
+Role:
+- detect frame header
+- parse payload length
+- output payload bytes one by one
+- raise `frame_done / error`
 
-- 识别帧头
-- 读取长度
-- 逐字节输出 payload
-- 标记 `frame_done / error`
-
-输出给：
-
+Feeds:
 - `ACL`
-- 顶层控制逻辑
+- top-level protocol logic
 
 ### ACL
 
-作用：
+Role:
+- apply a minimal rule match on the first payload byte
+- decide pass-through or block
+- currently supports `4` fixed block rules
 
-- 根据关键字进行最小规则匹配
-- 决定“透传”还是“阻断”
-- 当前支持 `4` 条固定阻断规则
-
-输出给：
-
+Feeds:
 - `Crypto Bridge`
 
 ### Crypto Bridge
 
-作用：
+Role:
+- gather `8-bit` data into `128-bit` blocks
+- trigger the selected crypto core
+- scatter `128-bit` ciphertext back into `8-bit` UART bytes
+- bypass encryption for short control frames
+- currently supports up to two consecutive `128-bit` blocks
 
-- 8-bit 到 128-bit 的拼包
-- 触发加密核
-- 128-bit 到 8-bit 的拆包
-- 处理短控制帧绕过
-
-输出给：
-
+Feeds:
 - `UART TX`
 
 ### AES/SM4 Core
 
-作用：
+Role:
+- perform fixed-key block encryption
 
-- 完成固定密钥块加密
-
-当前模式：
-
-- `SM4-128`
+Current cores:
 - `AES-128`
+- `SM4-128`
 
 ### UART TX
 
-作用：
-
-- 将处理结果回发到 PC
+Role:
+- send processed data back to the PC
 
 ### Top Control / Counters
 
-作用：
+Role:
+- detect invalid mode selectors
+- maintain `total / acl / aes / sm4 / err`
+- generate the stats response frame
 
-- 识别非法模式选择
-- 统计 `total / acl / aes / sm4 / err`
-- 生成状态查询响应
+## 3. Current Protocol Design
 
-## 3. 当前协议设计
-
-### 数据帧
-
-基础格式：
+Base frame format:
 
 ```text
 SOF(0x55) + LEN + PAYLOAD
 ```
 
-### SM4 默认模式
+### Default SM4 Mode
 
 - `LEN = 16`
-- `PAYLOAD` 直接作为 `SM4` 明文块
+- payload is one `SM4` plaintext block
 
-### AES 显式模式
+- `LEN = 32`
+- payload is two consecutive `SM4` plaintext blocks
 
-- `LEN = 17`
-- 第 1 个 payload 字节为 `0x41 ('A')`
-- 后 16 字节为 `AES` 明文块
-
-### 显式 SM4 模式
+### Explicit AES Mode
 
 - `LEN = 17`
-- 第 1 个 payload 字节为 `0x53 ('S')`
-- 后 16 字节为 `SM4` 明文块
+- payload byte `0` = `0x41 ('A')`
+- next `16B` = AES plaintext
 
-### 阻断与错误
+- `LEN = 33`
+- payload byte `0` = `0x41 ('A')`
+- next `32B` = two consecutive AES plaintext blocks
 
-- ACL 命中：返回 `D\\n`
-- 协议错误：返回 `E\\n`
+### Explicit SM4 Mode
 
-### 状态查询
+- `LEN = 17`
+- payload byte `0` = `0x53 ('S')`
+- next `16B` = SM4 plaintext
 
-- 查询命令：`55 01 3F`
-- 响应格式：`53 total acl aes sm4 err 0A`
+- `LEN = 33`
+- payload byte `0` = `0x53 ('S')`
+- next `32B` = two consecutive SM4 plaintext blocks
 
-## 4. 当前模块实现思路
+### Block and Error Replies
 
-### Parser 思路
+- ACL block reply: `D\n`
+- protocol error reply: `E\n`
 
-- 采用轻量 FSM
-- 只做当前纯 PL 主线所需的最小解析
-- 不追求完整网络协议栈
+### Stats Query
 
-### ACL 思路
+- command: `55 01 3F`
+- response: `53 total acl aes sm4 err 0A`
 
-- 当前实现 `4` 条固定规则
-- 目标是在不增加复杂握手的前提下，把单条规则 demo 提升为小型硬件规则引擎
+## 4. Module Implementation Ideas
 
-### Crypto Bridge 思路
+### Parser
 
-- 不做复杂控制协议
-- 不做动态密钥管理
-- 不做硬件 padding
-- 先聚焦单块数据的纯计算链
+- lightweight FSM
+- only implements the minimum parsing needed for the current pure-`PL` datapath
+- deliberately avoids a full network protocol stack
 
-### AES/SM4 思路
+### ACL
 
-- 使用固定测试密钥
-- 先完成已知向量闭环
-- 保证算法核接入稳定后，再考虑扩展能力
+- currently a `4`-rule fixed matcher
+- upgrades the design from a single-rule demo to a small hardware rule engine
 
-### 状态计数思路
+### Crypto Bridge
 
-- 计数器全部放在顶层轻量控制逻辑中
-- 不污染核心加密桥和 UART 时序
-- 通过一条最小查询命令回读，交给上位机做展示
+- avoids complex control protocol
+- avoids dynamic key management
+- avoids hardware padding
+- currently focuses on `1~2` `128-bit` blocks
+- uses a clean `gather -> encrypt -> scatter` pipeline to keep the datapath deterministic
 
-## 5. 为什么这样裁剪
+### AES/SM4
 
-当前裁剪原则是：
+- fixed internal test key
+- first target is known-vector closure
+- after that, the design grows by expanding the bridge, not by bloating the algorithm cores
 
-- 避免引入 `ARM/PS`
-- 避免引入 `DMA/DDR`
-- 避免过早追求复杂协议栈
-- 用最小系统先证明：
-  - 输入链可用
-  - 规则链可用
-  - 加密链可用
-  - 输出链可用
+### Counters and Stats
 
-这样更适合 `RX50T` 资源条件，也更适合比赛要求。
+- all counters stay in a lightweight top-level control block
+- keeps the crypto path clean
+- gives the host a cheap observability interface
 
-## 6. 当前阶段结论
+## 5. Why the Design Was Trimmed This Way
 
-当前系统已经不只是“模块存在”，而是形成了真实闭环：
+The trimming rules are intentional:
 
-- 串口输入有效
-- 解析有效
-- ACL 有效
-- AES/SM4 有效
-- 串口输出有效
-- 状态计数回读有效
+- avoid `ARM/PS`
+- avoid `DMA/DDR`
+- avoid a full protocol stack too early
+- first prove the shortest closed loop:
+  - input works
+  - rule filtering works
+  - encryption works
+  - output works
 
-因此，当前 `RX50T` 版本已经可以作为：
+This makes the design much better suited to `RX50T` resource and contest constraints.
 
-- 竞赛版主线架构
-- 技术文档主体
-- 上板演示版本
+## 6. Current Conclusion
+
+The system is no longer just a set of isolated modules. It is now a real closed loop:
+
+- UART input works
+- parsing works
+- ACL works
+- AES/SM4 works
+- UART output works
+- stats readback works
+
+Because of that, the current `RX50T` version can already serve as:
+- the main contest architecture
+- the main technical-document structure
+- the board-demo version

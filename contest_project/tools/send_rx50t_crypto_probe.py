@@ -14,13 +14,17 @@ AES128_PT = bytes.fromhex("00 11 22 33 44 55 66 77 88 99 aa bb cc dd ee ff")
 AES128_CT = bytes.fromhex("69 c4 e0 d8 6a 7b 04 30 d8 cd b7 80 70 b4 c5 5a")
 SM4_PT = bytes.fromhex("01 23 45 67 89 ab cd ef fe dc ba 98 76 54 32 10")
 SM4_CT = bytes.fromhex("68 1e df 34 d2 06 96 5e 86 b3 e9 4f 53 6e 42 46")
+AES128_PT2 = bytes.fromhex("ff ee dd cc bb aa 99 88 77 66 55 44 33 22 11 00")
+AES128_CT2 = bytes.fromhex("1b 87 23 78 79 5f 4f fd 77 28 55 fc 87 ca 96 4d")
+SM4_PT2 = bytes.fromhex("00 11 22 33 44 55 66 77 88 99 aa bb cc dd ee ff")
+SM4_CT2 = bytes.fromhex("09 32 5c 48 53 83 2d cb 93 37 a5 98 4f 67 1b 9a")
 
 
 def build_frame(payload: bytes) -> bytes:
     if not payload:
         raise ValueError("payload must not be empty")
-    if len(payload) > 32:
-        raise ValueError("payload length must be <= 32 bytes")
+    if len(payload) > 64:
+        raise ValueError("payload length must be <= 64 bytes")
     return bytes([0x55, len(payload)]) + payload
 
 
@@ -49,6 +53,16 @@ def main() -> int:
         help="Send the explicit AES selector plus the fixed 16-byte AES plaintext",
     )
     parser.add_argument(
+        "--sm4-two-block-vector",
+        action="store_true",
+        help="Send a fixed 32-byte SM4 plaintext and expect 32 ciphertext bytes",
+    )
+    parser.add_argument(
+        "--aes-two-block-vector",
+        action="store_true",
+        help="Send the explicit AES selector plus a fixed 32-byte plaintext",
+    )
+    parser.add_argument(
         "--block-ascii",
         help="Send an ASCII payload expected to hit ACL block rule and return D\\n",
     )
@@ -74,6 +88,8 @@ def main() -> int:
         for flag in (
             args.sm4_known_vector,
             args.aes_known_vector,
+            args.sm4_two_block_vector,
+            args.aes_two_block_vector,
             args.block_ascii is not None,
             args.invalid_selector,
             args.query_stats,
@@ -81,7 +97,7 @@ def main() -> int:
         if flag
     )
     if mode_count != 1:
-        raise SystemExit("Choose exactly one of --sm4-known-vector, --aes-known-vector, --block-ascii, --invalid-selector, or --query-stats")
+        raise SystemExit("Choose exactly one of --sm4-known-vector, --aes-known-vector, --sm4-two-block-vector, --aes-two-block-vector, --block-ascii, --invalid-selector, or --query-stats")
 
     if args.sm4_known_vector:
         tx = build_frame(SM4_PT)
@@ -89,6 +105,12 @@ def main() -> int:
     elif args.aes_known_vector:
         tx = build_frame(b"A" + AES128_PT)
         expected = AES128_CT
+    elif args.sm4_two_block_vector:
+        tx = build_frame(SM4_PT + SM4_PT2)
+        expected = SM4_CT + SM4_CT2
+    elif args.aes_two_block_vector:
+        tx = build_frame(b"A" + AES128_PT + AES128_PT2)
+        expected = AES128_CT + AES128_CT2
     elif args.invalid_selector:
         tx = build_frame(b"Q" + AES128_PT)
         expected = b"E\n"

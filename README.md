@@ -1,66 +1,75 @@
 # RX50T Crypto Gateway
 
-`RX50T Crypto Gateway` 是一个面向资源受限 FPGA 的纯 `PL` 安全数据通路原型。  
-当前版本已经在 `RX50T` 开发板上打通并实板验证了以下主线：
+`RX50T Crypto Gateway` is a pure-`PL` security datapath prototype for the `RX50T` board.
 
-`UART -> Parser -> 4-rule ACL -> AES/SM4 -> UART + Stats Query`
+The current validated mainline is:
 
-这条主线不依赖 `ARM/PS`、`DMA/DDR/PBM` 或完整网络协议栈，目标是用最小闭环证明：
+`UART -> Parser -> 4-rule ACL -> AES/SM4 (16B/32B) -> UART + Stats Query`
 
-- 串口输入可用
-- 帧解析可用
-- 硬件 ACL 阻断可用
-- `AES-128 / SM4-128` 块加密可用
-- 状态计数器与上位机查询可用
+This repository intentionally does not depend on:
+- `ARM/PS`
+- `DMA/DDR/PBM`
+- a full `Ethernet/IP/UDP` stack
 
-## 当前状态
+The goal is to keep the board focused on the hard real-time work:
+- frame parsing
+- hardware ACL blocking
+- AES/SM4 block encryption
+- lightweight observability through stats counters
 
-当前 `P1` 基线已经完成：
+## Current Status
 
-- `4` 条固定 ACL 规则：`X / Y / Z / W`
-- `AES/SM4` 双模式切换
-- 协议错误回退 `E\n`
-- 状态查询命令 `55 01 3F`
-- `total / acl / aes / sm4 / err` 五个计数器
+`P1 Phase 2` is complete and has fresh real-board evidence.
 
-当前板级有效配置：
+Implemented:
+- `4` fixed ACL rules: `X / Y / Z / W`
+- `AES-128` and `SM4-128`
+- single-block (`16B`) and two-block (`32B`) encryption
+- protocol error fallback `E\n`
+- ACL block fallback `D\n`
+- stats query command `55 01 3F`
+- five `8-bit` counters:
+  - `total`
+  - `acl`
+  - `aes`
+  - `sm4`
+  - `err`
 
-- 开发板：`RX50T`
-- 串口：`COM12`
-- 串口参数：`115200 8N1`
-- 时钟：`Y18 / 50MHz`
-- UART：`K1 (RX) / J1 (TX)`
-- 复位按键：`J20`
+Board baseline:
+- board: `RX50T`
+- serial port: `COM12`
+- UART: `115200 8N1`
+- clock: `Y18 / 50MHz`
+- UART pins: `K1 (RX) / J1 (TX)`
+- reset key: `J20`
 
-## 仓库结构
+## Repository Layout
 
 - `contest_project/rtl/contest/`
-  - 当前纯 `PL` 主线 RTL
+  - current pure-`PL` RTL
 - `contest_project/tb/contest/`
-  - 对应 testbench
+  - simulation testbenches
 - `contest_project/tools/`
-  - 板测/串口验证脚本
+  - host-side UART test tools
 - `contest_project/scripts/`
-  - Vivado 构建脚本
+  - Vivado build scripts
 - `contest_project/constraints/`
-  - 板级约束
+  - board constraints
 - `reference/`
-  - 从原始工程提炼出的算法核和参考资产
+  - extracted reference crypto code from the original large project
 - `docs/`
-  - 架构说明、当前基线、板测说明、演示脚本
+  - architecture notes, current baseline, board test docs, demo runbook
 - `daily-progress/`
-  - 每日开发进度记录
+  - day-by-day progress logs
 
-## 文档入口
+## Documentation Entry Points
 
-- [当前基线说明](./docs/RX50T_CURRENT_BASELINE.md)
-- [架构总览](./docs/RX50T_ARCHITECTURE_OVERVIEW.md)
-- [P1 演示脚本](./docs/RX50T_P1_DEMO_RUNBOOK.md)
-- [每日进度索引](./daily-progress/README.md)
+- [Current baseline](./docs/RX50T_CURRENT_BASELINE.md)
+- [Architecture overview](./docs/RX50T_ARCHITECTURE_OVERVIEW.md)
+- [P1 demo runbook](./docs/RX50T_P1_DEMO_RUNBOOK.md)
+- [Daily progress index](./daily-progress/README.md)
 
-## 当前能力
-
-### 已实现
+## Implemented Capability
 
 - `UART Echo`
 - `UART -> Parser -> UART`
@@ -68,40 +77,45 @@
 - `UART -> Parser -> ACL -> SM4 -> UART`
 - `UART -> Parser -> ACL -> AES/SM4 -> UART`
 - `UART -> Parser -> 4-rule ACL -> AES/SM4 -> UART + Stats Query`
+- `UART -> Parser -> 4-rule ACL -> AES/SM4 (16B/32B) -> UART + Stats Query`
 
-### 当前不做
+## Explicitly Out of Scope
 
-- 动态密钥下发
+- dynamic key download
 - `CBC`
-- 多块连续加密
+- payloads longer than `32B`
 - `DMA / DDR / PBM`
-- `ARM/PS` 控制面
-- 完整 `Ethernet/IP/UDP` 协议栈
+- `ARM/PS`
+- full `Ethernet/IP/UDP` protocol processing
 
-## 快速演示
+## Quick Demo
 
-下载当前 `P1` bit 后，在 `COM12` 上运行：
+Program the current `P1 Phase 2` bitstream, then run:
 
 ```powershell
 py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --query-stats --expect-stats 0,0,0,0,0
 py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --block-ascii XYZ
 py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --sm4-known-vector
 py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --aes-known-vector
+py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --sm4-two-block-vector
+py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --aes-two-block-vector
 py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --invalid-selector
-py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --query-stats --expect-stats 3,1,1,1,1
+py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --query-stats --expect-stats 5,1,2,2,1
 ```
 
-## 当前 P1 板测结果
+## Latest Verified Results
 
-已实板验证通过：
+Real-board verified:
+- initial stats query: `53 00 00 00 00 00 0A`
+- ACL block: `XYZ -> 44 0A`
+- `SM4` known vector: pass
+- `AES` known vector: pass
+- `SM4` two-block vector: pass
+- `AES` two-block vector: pass
+- invalid selector: `45 0A`
+- final stats query: `53 05 01 02 02 01 0A`
 
-- 初始状态查询：`53 00 00 00 00 00 0A`
-- ACL 阻断：`XYZ -> 44 0A`
-- `SM4` 已知向量：通过
-- `AES` 已知向量：通过
-- 非法模式：`45 0A`
-- 最终状态查询：`53 03 01 01 01 01 0A`
+## Relation to the Original Project
 
-## 联系关系
-
-本仓库来自更大的原始工程裁剪，但当前 GitHub 仓库只聚焦 `RX50T` 纯 `PL` 竞赛版，不再承载原始 `Zynq + ARM + DMA + DDR` 的完整异构系统。
+This repository is the trimmed `RX50T` pure-`PL` contest branch extracted from a much larger original project.
+It no longer tries to carry the original `Zynq + ARM + DMA + DDR` heterogeneous system.

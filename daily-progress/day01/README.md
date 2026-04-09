@@ -1,27 +1,27 @@
 # Day 01
 
-## 当日目标
+## Goal
 
-建立 `RX50T` 纯 `PL` 版最小可验证主线，并将其推进到可用于演示和文档编写的 `P1` 基线。
+Build the first stable pure-`PL` baseline on `RX50T` and push it far enough to support both board demonstration and technical documentation.
 
-## 当日完成内容
+## Completed Work
 
-### 1. 板级纯 PL 主线打通
+### 1. Mainline Closed Loop
 
-当前主线已经形成：
+The first complete mainline was established:
 
 `UART -> Parser -> 4-rule ACL -> AES/SM4 -> UART + Stats Query`
 
-### 2. 串口与板级基线确认
+### 2. Board Baseline Confirmed
 
-- 开发板：`RX50T`
-- 串口：`COM12`
-- 串口参数：`115200 8N1`
-- 时钟：`Y18 / 50MHz`
-- UART：`K1 (RX) / J1 (TX)`
-- 复位键：`J20`
+- board: `RX50T`
+- serial port: `COM12`
+- UART: `115200 8N1`
+- clock: `Y18 / 50MHz`
+- UART pins: `K1 (RX) / J1 (TX)`
+- reset key: `J20`
 
-### 3. 核心模块完成
+### 3. Core Modules Completed
 
 - `contest_uart_rx.sv`
 - `contest_uart_tx.sv`
@@ -32,95 +32,84 @@
 - `rx50t_uart_crypto_probe_top.sv`
 - `rx50t_uart_crypto_probe_board_top.sv`
 
-### 4. P1 功能完成
+### 4. P1 Phase 1 Features Completed
 
-- `4` 条固定 ACL 规则：`X / Y / Z / W`
-- `AES-128 / SM4-128` 双模式
-- 非法模式错误返回 `E\n`
-- 阻断返回 `D\n`
-- 状态查询命令 `55 01 3F`
-- 计数器：
+- `4` fixed ACL rules: `X / Y / Z / W`
+- `AES-128 / SM4-128`
+- invalid selector fallback `E\n`
+- ACL block fallback `D\n`
+- stats query command `55 01 3F`
+- counters:
   - `total`
   - `acl`
   - `aes`
   - `sm4`
   - `err`
 
-## 验证方式
+## Verification
 
-### 仿真验证
+### Simulation
 
-已通过：
-
+Passed:
 - `tb_contest_acl_core`
 - `tb_contest_crypto_bridge`
 - `tb_uart_crypto_probe`
 
-### 实现验证
+### Implementation
 
-Vivado 构建通过，结果：
-
+Vivado build passed with:
 - `WNS = 5.552ns`
 - `WHS = 0.055ns`
 - `DRC violations = 0`
 - `Slice LUTs = 3345`
 - `Slice Registers = 4266`
 
-### 实板验证
+### Real Board
 
-已在 `COM12` 上完成：
+Verified on `COM12`:
 
-1. 初始状态查询：
-   - 输入：`55 01 3F`
-   - 输出：`53 00 00 00 00 00 0A`
+1. initial stats query
+   - input: `55 01 3F`
+   - output: `53 00 00 00 00 00 0A`
 
-2. ACL 阻断：
-   - 输入：`55 03 58 59 5A`
-   - 输出：`44 0A`
+2. ACL block
+   - input: `55 03 58 59 5A`
+   - output: `44 0A`
 
-3. `SM4` 已知向量：
-   - 输入：`55 10 01 23 45 67 89 AB CD EF FE DC BA 98 76 54 32 10`
-   - 输出：`68 1E DF 34 D2 06 96 5E 86 B3 E9 4F 53 6E 42 46`
+3. `SM4` known vector
+   - input: `55 10 01 23 45 67 89 AB CD EF FE DC BA 98 76 54 32 10`
+   - output: `68 1E DF 34 D2 06 96 5E 86 B3 E9 4F 53 6E 42 46`
 
-4. `AES` 已知向量：
-   - 输入：`55 11 41 00 11 22 33 44 55 66 77 88 99 AA BB CC DD EE FF`
-   - 输出：`69 C4 E0 D8 6A 7B 04 30 D8 CD B7 80 70 B4 C5 5A`
+4. `AES` known vector
+   - input: `55 11 41 00 11 22 33 44 55 66 77 88 99 AA BB CC DD EE FF`
+   - output: `69 C4 E0 D8 6A 7B 04 30 D8 CD B7 80 70 B4 C5 5A`
 
-5. 非法模式：
-   - 输入：`55 11 51 00 11 22 33 44 55 66 77 88 99 AA BB CC DD EE FF`
-   - 输出：`45 0A`
+5. invalid selector
+   - input: `55 11 51 00 11 22 33 44 55 66 77 88 99 AA BB CC DD EE FF`
+   - output: `45 0A`
 
-6. 最终状态查询：
-   - 输入：`55 01 3F`
-   - 输出：`53 03 01 01 01 01 0A`
+6. final stats query
+   - input: `55 01 3F`
+   - output: `53 03 01 01 01 01 0A`
 
-## 当前边界
+## Current Boundaries
 
-当前版本仍然明确不包含：
-
-- 动态密钥下发
+Not included in the baseline:
+- dynamic key download
 - `CBC`
-- 多块连续加密
+- multi-block continuous encryption
 - `DMA / DDR / PBM`
 - `ARM/PS`
-- 完整网络协议栈
+- full network protocol stack
 
-## 当日结论
+## Conclusion
 
-`RX50T` 当前版本已经不再是单模块实验，而是一条完成仿真、实现和实板闭环验证的纯 `PL` 安全数据通路基线。
+The `RX50T` version was no longer a set of isolated module experiments by the end of Day 01.
+It had become a real pure-`PL` closed loop with simulation, implementation, and board evidence.
 
-它已经具备：
+## Next Step
 
-- 纯硬件串口输入/输出
-- 轻量帧解析
-- 多规则 ACL 阻断
-- `AES/SM4` 双模式硬件块加密
-- 状态计数与上位机查询
-
-## 下一步
-
-下一阶段优先在这条稳定主线上继续扩展：
-
-1. 多块连续加密
-2. 更规范的上位机协议与界面
-3. 文档、架构图和演示材料进一步收口
+Priority for the next stage:
+1. multi-block continuous encryption
+2. stronger host-side protocol and demo tooling
+3. tighter architecture and demo documentation

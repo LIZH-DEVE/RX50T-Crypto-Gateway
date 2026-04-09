@@ -1,148 +1,141 @@
-# RX50T P1 演示脚本
+# RX50T P1 Demo Runbook
 
-## 1. 演示目标
+## 1. Demo Goal
 
-本次 `P1` 演示要证明的不是“板子能亮起来”，而是当前 `RX50T` 版本已经具备一条可观测的纯 `PL` 安全数据通路：
+This `P1` demo is meant to show a visible pure-`PL` security datapath:
 
-`UART -> parser -> 4-rule ACL -> AES/SM4 -> UART + stats query`
+`UART -> parser -> 4-rule ACL -> AES/SM4(16B/32B) -> UART + stats query`
 
-## 2. 板级配置
+The point is not "the board powers up". The point is that the board now behaves like a small hardware crypto/filter engine with observable results.
 
-- 开发板：`RX50T`
-- 串口：`COM12`
-- 参数：`115200 8N1`
-- 时钟：`Y18 / 50MHz`
-- UART：`K1(rx) / J1(tx)`
+## 2. Board Setup
 
-本轮演示使用 bit：
+- board: `RX50T`
+- serial port: `COM12`
+- UART: `115200 8N1`
+- clock: `Y18 / 50MHz`
+- UART pins: `K1(rx) / J1(tx)`
 
-- `contest_project/build/rx50t_uart_crypto_probe/rx50t_uart_crypto_probe_board_top_mapB_p1_stats_acl.bit`
+Bitstream used for this demo:
+- `contest_project/build/rx50t_uart_crypto_probe/rx50t_uart_crypto_probe_board_top_mapB_p1_multiblock.bit`
 
-## 3. 演示顺序
+## 3. Demo Sequence
 
-### 第一步：查询初始状态
-
-命令：
+### Step 1: Query Initial Stats
 
 ```powershell
 py -3 D:\FPGAhanjia\jichuangsai\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --query-stats --expect-stats 0,0,0,0,0
 ```
 
-预期：
+Expected:
+- `53 00 00 00 00 00 0A`
 
-- 返回 `53 00 00 00 00 00 0A`
+Meaning:
+- all counters start at zero
 
-说明：
-
-- 当前总帧、ACL、AES、SM4、错误计数均为 `0`
-
-### 第二步：演示 ACL 阻断
-
-命令：
+### Step 2: Show ACL Block
 
 ```powershell
 py -3 D:\FPGAhanjia\jichuangsai\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --block-ascii XYZ
 ```
 
-预期：
+Expected:
+- `44 0A`
 
-- 返回 `44 0A`
+Meaning:
+- `X/Y/Z/W` hit the fixed ACL rules and are blocked in hardware
 
-说明：
-
-- 当前 `X/Y/Z/W` 会命中固定规则并被硬件阻断
-
-### 第三步：演示 SM4 加密
-
-命令：
+### Step 3: Show Single-Block SM4
 
 ```powershell
 py -3 D:\FPGAhanjia\jichuangsai\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --sm4-known-vector
 ```
 
-预期：
+Expected:
+- `68 1e df 34 d2 06 96 5e 86 b3 e9 4f 53 6e 42 46`
 
-- 返回 `68 1e df 34 d2 06 96 5e 86 b3 e9 4f 53 6e 42 46`
-
-说明：
-
-- 证明 `SM4-128` 硬件块加密路径正常
-
-### 第四步：演示 AES 加密
-
-命令：
+### Step 4: Show Single-Block AES
 
 ```powershell
 py -3 D:\FPGAhanjia\jichuangsai\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --aes-known-vector
 ```
 
-预期：
+Expected:
+- `69 c4 e0 d8 6a 7b 04 30 d8 cd b7 80 70 b4 c5 5a`
 
-- 返回 `69 c4 e0 d8 6a 7b 04 30 d8 cd b7 80 70 b4 c5 5a`
+### Step 5: Show Two-Block SM4
 
-说明：
+```powershell
+py -3 D:\FPGAhanjia\jichuangsai\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --sm4-two-block-vector
+```
 
-- 证明 `AES-128` 显式模式切换与硬件块加密路径正常
+Expected:
+- `68 1e df 34 d2 06 96 5e 86 b3 e9 4f 53 6e 42 46 09 32 5c 48 53 83 2d cb 93 37 a5 98 4f 67 1b 9a`
 
-### 第五步：演示协议错误处理
+Meaning:
+- `SM4` now handles two consecutive `128-bit` blocks, not just a single demo block
 
-命令：
+### Step 6: Show Two-Block AES
+
+```powershell
+py -3 D:\FPGAhanjia\jichuangsai\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --aes-two-block-vector
+```
+
+Expected:
+- `69 c4 e0 d8 6a 7b 04 30 d8 cd b7 80 70 b4 c5 5a 1b 87 23 78 79 5f 4f fd 77 28 55 fc 87 ca 96 4d`
+
+Meaning:
+- `AES` also supports two consecutive `128-bit` blocks
+
+### Step 7: Show Protocol Error Handling
 
 ```powershell
 py -3 D:\FPGAhanjia\jichuangsai\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --invalid-selector
 ```
 
-预期：
+Expected:
+- `45 0A`
 
-- 返回 `45 0A`
+Meaning:
+- invalid selector does not hang the system; it falls back cleanly to an error reply
 
-说明：
-
-- 非法模式选择会触发协议错误回退
-
-### 第六步：查询最终状态
-
-命令：
+### Step 8: Query Final Stats
 
 ```powershell
-py -3 D:\FPGAhanjia\jichuangsai\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --query-stats --expect-stats 3,1,1,1,1
+py -3 D:\FPGAhanjia\jichuangsai\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --query-stats --expect-stats 5,1,2,2,1
 ```
 
-预期：
+Expected:
+- `53 05 01 02 02 01 0A`
 
-- 返回 `53 03 01 01 01 01 0A`
-
-含义：
-
-- `total = 3`
+Meaning:
+- `total = 5`
 - `acl = 1`
-- `aes = 1`
-- `sm4 = 1`
+- `aes = 2`
+- `sm4 = 2`
 - `err = 1`
 
-## 4. 讲解口径
+## 4. Suggested Talking Points
 
-演示时建议按下面的话术讲：
+- Start by saying the board is a pure-`PL` datapath and does not depend on `ARM/PS`
+- Use the ACL step to show physical hardware blocking
+- Use the AES/SM4 steps to show algorithm switching
+- Use the two-block steps to show the bridge is beyond a single-block demo
+- Use the error step to show the protocol is not fragile
+- Use the final stats step to show the board is observable rather than a black box
 
-- 第一步先说明板子是纯 `PL` 通路，不依赖 `ARM/PS`
-- 第二步展示硬件 ACL 在底层直接熔断非法流
-- 第三步和第四步展示 `SM4/AES` 双算法切换
-- 第五步展示协议错误不会把系统打挂，而是进入明确回退
-- 第六步展示板子内部计数器不是“黑盒”，而是可被上位机读取和监控
+## 5. Current Explicit Boundaries
 
-## 5. 当前边界
+This `P1` demo does **not** claim:
+- dynamic key download
+- `CBC`
+- payloads longer than `32B`
+- a full network protocol stack
+- `DMA / DDR / PBM`
 
-本次 `P1` 演示不宣称以下能力：
-
-- 动态密钥下发
-- CBC
-- 多块连续加密
-- 完整网络协议栈
-- DMA / DDR / PBM
-
-当前演示只证明：
-
-- 纯 `PL` 主线可用
-- 多规则 ACL 可用
-- AES/SM4 双模式可用
-- 状态计数与查询可用
+This demo does prove:
+- pure-`PL` mainline works
+- multi-rule ACL works
+- AES/SM4 dual-mode works
+- single-block and two-block encryption work
+- stats query works

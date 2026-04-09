@@ -105,7 +105,7 @@ module contest_uart_crypto_probe #(
 
     contest_parser_core #(
         .SOF_BYTE         (8'h55),
-        .MAX_PAYLOAD_BYTES(32)
+        .MAX_PAYLOAD_BYTES(64)
     ) u_parser (
         .i_clk          (i_clk),
         .i_rst_n        (i_rst_n),
@@ -206,7 +206,7 @@ module contest_uart_crypto_probe #(
                     frame_selector_seen_q <= 1'b1;
                     if (parser_payload_len == 8'd1 && parser_payload_byte == ASCII_QUERY) begin
                         frame_query_q <= 1'b1;
-                    end else if (parser_payload_len == 8'd17) begin
+                    end else if ((parser_payload_len == 8'd17) || (parser_payload_len == 8'd33)) begin
                         if (parser_payload_byte == MODE_AES) begin
                             frame_algo_sel_q <= ALG_AES;
                         end else if (parser_payload_byte == MODE_SM4) begin

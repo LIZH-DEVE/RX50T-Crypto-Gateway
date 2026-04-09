@@ -1,25 +1,24 @@
 # Daily Progress
 
-这个目录用于记录 `RX50T Crypto Gateway` 的逐日开发推进。
+This directory records the day-by-day progress of `RX50T Crypto Gateway`.
 
-记录原则：
+Recording rules:
+- one standalone `README` per day
+- only write what was actually completed that day
+- clearly separate "verified" from "still in progress"
+- keep commands, results, and boundaries when they matter
 
-- 每天一份独立 `README`
-- 只写当日真实完成内容
-- 区分“已验证通过”和“仍在进行”
-- 尽量保留关键命令、关键结果和边界
-
-## 进度索引
+## Progress Index
 
 - [Day 01](./day01/README.md)
+- [Day 02](./day02/README.md)
 
-## 当前建议写法
+## Suggested Daily Format
 
-每日日志建议包含：
-
-1. 当日目标
-2. 当日完成模块
-3. 验证方式
-4. 关键结果
-5. 当前边界
-6. 下一步计划
+Each daily note should include:
+1. goal of the day
+2. completed modules or milestones
+3. verification method
+4. key results
+5. current boundaries
+6. next step

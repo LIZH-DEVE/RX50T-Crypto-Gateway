@@ -7,6 +7,22 @@ module tb_uart_crypto_probe;
     localparam integer BAUD         = 100_000;
     localparam integer CLK_PERIODNS = 1000;
     localparam integer BIT_PERIODNS = 10000;
+    localparam logic [255:0] SM4_2BLOCK_PT = {
+        128'h0123456789abcdeffedcba9876543210,
+        128'h00112233445566778899aabbccddeeff
+    };
+    localparam logic [255:0] SM4_2BLOCK_CT = {
+        128'h681edf34d206965e86b3e94f536e4246,
+        128'h09325c4853832dcb9337a5984f671b9a
+    };
+    localparam logic [255:0] AES_2BLOCK_PT = {
+        128'h00112233445566778899aabbccddeeff,
+        128'hffeeddccbbaa99887766554433221100
+    };
+    localparam logic [255:0] AES_2BLOCK_CT = {
+        128'h69c4e0d86a7b0430d8cdb78070b4c55a,
+        128'h1b872378795f4ffd772855fc87ca964d
+    };
 
     reg clk;
     reg rst_n;
@@ -152,6 +168,43 @@ module tb_uart_crypto_probe;
 
         #(20 * BIT_PERIODNS);
 
+        // Default 32-byte frame -> two-block SM4 ciphertext.
+        fork
+            begin
+                uart_send_byte(8'h55);
+                uart_send_byte(8'd32);
+                for (int send_idx = 0; send_idx < 32; send_idx = send_idx + 1) begin
+                    uart_send_byte(SM4_2BLOCK_PT[255 - (send_idx*8) -: 8]);
+                end
+            end
+            begin
+                for (int recv_idx = 0; recv_idx < 32; recv_idx = recv_idx + 1) begin
+                    uart_expect_byte(SM4_2BLOCK_CT[255 - (recv_idx*8) -: 8]);
+                end
+            end
+        join
+
+        #(20 * BIT_PERIODNS);
+
+        // Explicit AES mode: 'A' + 32-byte plaintext -> two-block AES ciphertext.
+        fork
+            begin
+                uart_send_byte(8'h55);
+                uart_send_byte(8'd33);
+                uart_send_byte(8'h41);
+                for (int send_idx = 0; send_idx < 32; send_idx = send_idx + 1) begin
+                    uart_send_byte(AES_2BLOCK_PT[255 - (send_idx*8) -: 8]);
+                end
+            end
+            begin
+                for (int recv_idx = 0; recv_idx < 32; recv_idx = recv_idx + 1) begin
+                    uart_expect_byte(AES_2BLOCK_CT[255 - (recv_idx*8) -: 8]);
+                end
+            end
+        join
+
+        #(20 * BIT_PERIODNS);
+
         // Invalid explicit selector -> E\n
         fork
             begin
@@ -179,10 +232,10 @@ module tb_uart_crypto_probe;
             end
             begin
                 uart_expect_byte(8'h53);
-                uart_expect_byte(8'h03);
+                uart_expect_byte(8'h05);
                 uart_expect_byte(8'h01);
-                uart_expect_byte(8'h01);
-                uart_expect_byte(8'h01);
+                uart_expect_byte(8'h02);
+                uart_expect_byte(8'h02);
                 uart_expect_byte(8'h01);
                 uart_expect_byte(8'h0A);
             end

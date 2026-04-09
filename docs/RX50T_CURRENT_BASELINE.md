@@ -1,329 +1,287 @@
-# RX50T 当前已实现基线
+# RX50T Current Baseline
 
-## 1. 项目定位
+## 1. Project Positioning
 
-当前 `RX50T` 版本不是原 `AX7020/Zynq` 完整异构系统的直接移植，而是针对比赛约束重新抽取出来的一条纯 `PL` 最小闭环。其核心目标是：
+The current `RX50T` version is not a direct port of the original `AX7020/Zynq` heterogeneous system.
+It is a deliberately trimmed pure-`PL` branch built for a resource-constrained FPGA contest workflow.
 
-- 不使用 `ARM/PS`
-- 不依赖 `DMA/DDR/PBM`
-- 保留最能体现 FPGA 价值的硬件数据通路
-- 在 `RX50T` 上完成可仿真、可综合、可上板的纯硬件演示
+Design goals:
+- no `ARM/PS`
+- no `DMA/DDR/PBM`
+- keep only the highest-value hardware datapath
+- maintain a clean real-board demonstration path
 
-当前已经打通的主线为：
+The current validated mainline is:
 
-`UART -> parser -> ACL -> AES/SM4 -> UART`
+`UART -> Parser -> ACL -> AES/SM4 -> UART`
 
-当前 `P1` 版本在这条主线上额外加入了：
+`P1` extends that path with:
+- `4` fixed ACL rules
+- `5` `8-bit` status counters
+- stats query over UART
+- single-block and two-block encryption
 
-- `4` 条固定 ACL 规则
-- `5` 个 8-bit 状态计数器
-- 串口状态查询命令
+This mainline now has:
+- simulation evidence
+- implementation evidence
+- real-board evidence
 
-这条主线已经具备：
+## 2. Board Baseline
 
-- 仿真验证
-- 实现收敛
-- 板级串口回环验证
-- 板级加密与 ACL 功能验证
+- board: `RX50T`
+- serial port: `COM12`
+- UART: `115200 8N1`
+- clock pin: `Y18`
+- clock frequency: `50MHz`
+- UART RX pin: `K1`
+- UART TX pin: `J1`
+- reset key: `J20`
 
-## 2. 当前已确认的板级基线
+## 3. Current Implemented Modules
 
-- 开发板：`RX50T`
-- 有效串口：`COM12`
-- 串口参数：`115200 8N1`
-- 时钟引脚：`Y18`
-- 时钟频率：`50MHz`
-- UART RX 引脚：`K1`
-- UART TX 引脚：`J1`
-- 复位按键：`J20`
+### 3.1 UART RX
 
-## 3. 当前已实现模块
-
-### 3.1 UART 接收模块
-
-文件：
-
+File:
 - `contest_uart_rx.sv`
 
-功能：
+Purpose:
+- receive bytes from the PC UART
+- convert asynchronous serial input into an internal byte stream
 
-- 从 PC 串口接收字节流
-- 完成异步串口采样与字节恢复
-- 输出 `valid + data` 形式的内部字节流
+### 3.2 UART TX
 
-实现思路：
-
-- 固定 `115200 8N1`
-- 使用 `50MHz` 时钟分频采样
-- 作为整条纯 PL 数据通路的输入边界
-
-### 3.2 UART 发送模块
-
-文件：
-
+File:
 - `contest_uart_tx.sv`
 
-功能：
+Purpose:
+- send processed bytes back to the PC
+- provide a simple UART egress for every stage of the pipeline
 
-- 将内部字节流重新编码为串口输出
-- 向 PC 回传处理结果
+### 3.3 Parser
 
-实现思路：
-
-- 固定 `115200 8N1`
-- 采用 `ready/valid` 风格与上游桥接层配合
-- 作为整条纯 PL 数据通路的输出边界
-
-### 3.3 Parser 模块
-
-文件：
-
+File:
 - `contest_parser_core.sv`
 
-功能：
+Purpose:
+- detect frame header
+- read payload length
+- output payload byte stream
+- generate `frame_done` and `error`
 
-- 完成最小帧格式解析
-- 做长度合法性检查
-- 提取 payload
-- 给后级 ACL 与加密路径提供帧级输入
-
-当前帧格式：
-
+Current frame format:
 - `SOF = 0x55`
-- 第二字节为 `LEN`
-- 后续为 `PAYLOAD[LEN]`
+- second byte = `LEN`
+- followed by `PAYLOAD[LEN]`
 
-实现思路：
+### 3.4 ACL
 
-- 使用小状态机依次完成：
-  - 等待帧头
-  - 读取长度
-  - 逐字节输出 payload
-- `LEN=0` 或超过上限时直接报错
-
-### 3.4 ACL 模块
-
-文件：
-
+File:
 - `contest_acl_core.sv`
 
-功能：
+Purpose:
+- apply minimal rule matching on parsed payload bytes
+- block illegal frames
+- pass legal frames downstream
 
-- 对解析出来的 payload 做最小规则匹配
-- 命中规则时阻断
-- 未命中时透传数据
-
-当前规则：
-
-- 固定 `4` 条阻断规则
-- 当首字节匹配以下关键字时阻断并返回 `D\\n`：
+Current fixed rules:
+- block when the first payload byte is:
   - `0x58 ('X')`
   - `0x59 ('Y')`
   - `0x5A ('Z')`
   - `0x57 ('W')`
 
-实现思路：
+Block response:
+- `D\n`
 
-- 命中规则时，停止透传原 payload
-- 由内部小状态机强制发出：
-  - `0x44 ('D')`
-  - `0x0A ('\\n')`
-- 未命中时，逐字节透传到后级
+### 3.5 Crypto Bridge
 
-### 3.5 Crypto Bridge 模块
-
-文件：
-
+File:
 - `contest_crypto_bridge.sv`
 
-功能：
+Purpose:
+- gather `8-bit` bytes into `128-bit` blocks
+- drive the AES/SM4 core
+- scatter ciphertext back into `8-bit` UART bytes
 
-- 将上游 8-bit 数据拼成 128-bit block
-- 驱动 `AES/SM4` 加密核
-- 将 128-bit 密文拆成 8-bit 串口输出
+Current boundary:
+- fixed internal test keys
+- supports `16B` and `32B` payload paths
+- no dynamic key download
+- no hardware padding
+- short control frames like `D\n` and `E\n` bypass encryption
 
-当前边界：
+Internal phases:
+- `S_RX_GATHER`: gather the full frame, currently up to `32B`
+- `S_ENCRYPT`: drive the crypto core block by block
+- `S_TX_SCATTER`: emit ciphertext one byte at a time
 
-- 固定内部测试密钥
-- 只支持单个 `16B` 明文块
-- 不做动态密钥下发
-- 不做硬件 padding
-- `D\\n / E\\n` 这类短控制帧绕过加密
+### 3.6 AES/SM4 Cores
 
-内部状态机：
-
-- `S_RX_GATHER`：收集 16 个字节
-- `S_ENCRYPT`：等待加密完成
-- `S_TX_SCATTER`：逐字节发送密文
-
-### 3.6 AES/SM4 算法核心
-
-来源：
-
+Source:
 - `reference/rtl/core/crypto/`
 
-当前已接入：
-
-- `SM4-128`
+Currently integrated:
 - `AES-128`
+- `SM4-128`
 
-当前使用方式：
+Current mode:
+- `128-bit` block processing
+- fixed internal test key
+- no `CBC`
 
-- 均为 `128-bit` 分组
-- 均为固定测试密钥
-- 当前工作模式为块加密处理
-- 不包含 `CBC`
+### 3.7 Top-Level Integration
 
-### 3.7 顶层封装
-
-文件：
-
+Files:
 - `contest_uart_crypto_probe.sv`
 - `rx50t_uart_crypto_probe_top.sv`
 - `rx50t_uart_crypto_probe_board_top.sv`
 
-功能：
+Purpose:
+- integrate `UART / parser / ACL / AES/SM4 / UART`
+- produce a real synthesizable and downloadable board top
+- host counters and UART stats reply logic
 
-- 将 `UART / parser / ACL / AES/SM4 / UART` 串成完整板级主线
-- 提供实际可综合、可下载、可验证的顶层
-- 管理状态计数器与串口状态查询响应
+### 3.8 Stats and Query Logic
 
-### 3.8 状态计数与查询逻辑
-
-位置：
-
+Location:
 - `contest_uart_crypto_probe.sv`
 
-功能：
-
-- 统计有效处理帧数
-- 统计 ACL 阻断次数
-- 统计 AES 加密次数
-- 统计 SM4 加密次数
-- 统计协议错误次数
-
-当前计数器：
-
+Counters:
 - `total`
 - `acl`
 - `aes`
 - `sm4`
 - `err`
 
-## 4. 当前协议规则
+Purpose:
+- count valid processed frames
+- count ACL hits
+- count AES invocations
+- count SM4 invocations
+- count protocol errors
 
-### 默认 SM4 模式
+## 4. Current Protocol Rules
+
+### Default SM4 Mode
 
 - `LEN = 16`
-- 直接将 16 字节 payload 作为 `SM4` 明文块
+- payload is one `SM4` plaintext block
 
-### 显式 AES 模式
+- `LEN = 32`
+- payload is two consecutive `SM4` plaintext blocks
 
-- `LEN = 17`
-- 第一个 payload 字节为模式选择符：
-  - `0x41 ('A')` 表示 `AES`
-- 后 16 字节作为明文块
-
-### 显式 SM4 模式
+### Explicit AES Mode
 
 - `LEN = 17`
-- 第一个 payload 字节为：
-  - `0x53 ('S')`
-- 后 16 字节作为 `SM4` 明文块
+- first payload byte = `0x41 ('A')`
+- remaining `16B` = one AES plaintext block
 
-### 错误与阻断返回
+- `LEN = 33`
+- first payload byte = `0x41 ('A')`
+- remaining `32B` = two consecutive AES plaintext blocks
 
-- 协议错误：返回 `E\\n`
-- ACL 阻断：返回 `D\\n`
+### Explicit SM4 Mode
 
-### 状态查询命令
+- `LEN = 17`
+- first payload byte = `0x53 ('S')`
+- remaining `16B` = one SM4 plaintext block
 
-- 查询帧：`55 01 3F`
-- 返回格式：`53 total acl aes sm4 err 0A`
-- 其中：
-  - `0x53 ('S')` 表示 stats 响应头
-  - `total / acl / aes / sm4 / err` 为 8-bit 计数值
-  - `0x0A` 为换行结束符
+- `LEN = 33`
+- first payload byte = `0x53 ('S')`
+- remaining `32B` = two consecutive SM4 plaintext blocks
 
-## 5. 当前已完成验证
+### Error and Block Replies
 
-### 仿真验证通过
+- ACL block response: `D\n`
+- protocol error response: `E\n`
 
+### Stats Query Command
+
+- query frame: `55 01 3F`
+- response format: `53 total acl aes sm4 err 0A`
+
+## 5. Verification Status
+
+### Simulation
+
+Verified:
 - `UART Echo`
 - `parser probe`
 - `ACL probe`
 - `SM4 probe`
 - `crypto probe (AES/SM4)`
+- `two-block AES/SM4`
 
-### 实板验证通过
+### Real Board
 
-已在 `COM12` 上通过：
-
+Verified on `COM12`:
 - `UART Echo`
 - `parser`
 - `ACL`
 - `SM4`
 - `AES`
+- `32B SM4`
+- `32B AES`
 
-当前实板有效结果包括：
+Representative real-board results:
 
-- `SM4` 已知向量：
-  - 输入：`55 10 01 23 45 67 89 ab cd ef fe dc ba 98 76 54 32 10`
-  - 输出：`68 1e df 34 d2 06 96 5e 86 b3 e9 4f 53 6e 42 46`
+- `SM4` known vector
+  - input: `55 10 01 23 45 67 89 ab cd ef fe dc ba 98 76 54 32 10`
+  - output: `68 1e df 34 d2 06 96 5e 86 b3 e9 4f 53 6e 42 46`
 
-- `AES` 已知向量：
-  - 输入：`55 11 41 00 11 22 33 44 55 66 77 88 99 aa bb cc dd ee ff`
-  - 输出：`69 c4 e0 d8 6a 7b 04 30 d8 cd b7 80 70 b4 c5 5a`
+- `AES` known vector
+  - input: `55 11 41 00 11 22 33 44 55 66 77 88 99 aa bb cc dd ee ff`
+  - output: `69 c4 e0 d8 6a 7b 04 30 d8 cd b7 80 70 b4 c5 5a`
 
-- `ACL` 阻断：
-  - 输入：`55 03 58 59 5a`
-  - 输出：`44 0a`
+- `SM4` two-block vector
+  - input: `55 20 01 23 45 67 89 ab cd ef fe dc ba 98 76 54 32 10 00 11 22 33 44 55 66 77 88 99 aa bb cc dd ee ff`
+  - output: `68 1e df 34 d2 06 96 5e 86 b3 e9 4f 53 6e 42 46 09 32 5c 48 53 83 2d cb 93 37 a5 98 4f 67 1b 9a`
 
-- `状态查询（初始）`：
-  - 输入：`55 01 3f`
-  - 输出：`53 00 00 00 00 00 0a`
+- `AES` two-block vector
+  - input: `55 21 41 00 11 22 33 44 55 66 77 88 99 aa bb cc dd ee ff ff ee dd cc bb aa 99 88 77 66 55 44 33 22 11 00`
+  - output: `69 c4 e0 d8 6a 7b 04 30 d8 cd b7 80 70 b4 c5 5a 1b 87 23 78 79 5f 4f fd 77 28 55 fc 87 ca 96 4d`
 
-- `状态查询（P1 功能验证后）`：
-  - 在依次执行 `ACL阻断 + SM4 + AES + 非法模式` 后
-  - 输入：`55 01 3f`
-  - 输出：`53 03 01 01 01 01 0a`
+- initial stats query
+  - input: `55 01 3F`
+  - output: `53 00 00 00 00 00 0A`
 
-## 6. 当前资源与实现状态
+- final `P1 Phase 2` stats query
+  - after: `ACL block + SM4 + AES + 32B SM4 + 32B AES + invalid selector`
+  - input: `55 01 3F`
+  - output: `53 05 01 02 02 01 0A`
 
-`rx50t_uart_crypto_probe_board_top` 当前实现结果：
+## 6. Current Implementation Numbers
 
-- `WNS = 5.552ns`
-- `WHS = 0.055ns`
+`rx50t_uart_crypto_probe_board_top` implementation results:
+- `WNS = 4.796ns`
+- `WHS = 0.074ns`
 - `DRC violations = 0`
-- `Slice LUTs = 3345`
-- `Slice Registers = 4266`
+- `Slice LUTs = 4317`
+- `Slice Registers = 4926`
 - `Bonded IOB = 4`
 - `RAMB18 = 0`
 - `DSPs = 0`
 
-这说明当前纯 PL 主线已经在 `RX50T` 上稳定收敛。
+## 7. Current Explicit Non-Goals
 
-## 7. 当前没有实现的内容
+Not part of the current baseline:
+- dynamic key download
+- `CBC`
+- payloads longer than `32B`
+- `DMA / DDR / PBM`
+- `Host/PS`
+- full `Ethernet/IP/UDP` stack
+- zero-copy fast path
 
-以下内容当前不属于 `RX50T` 基线：
+## 8. One-Line Summary
 
-- 动态密钥下发
-- CBC
-- 多块连续链式加密
-- DMA / DDR / PBM
-- Host/PS 控制面
-- 完整 Ethernet/IP/UDP 协议栈
-- 零拷贝 FastPath
+The current `RX50T` version is now a real pure-`PL` security datapath with verified evidence for:
 
-## 8. 当前版本一句话总结
+`UART input -> frame parsing -> ACL filtering -> AES/SM4 block encryption -> UART output`
 
-当前 `RX50T` 版本已经完成一条纯 `PL` 的最小闭环安全数据通路：
-
-`UART输入 -> 帧解析 -> ACL过滤 -> AES/SM4块加密 -> UART输出`
-
-并且该闭环已经具备仿真、实现和实板验证证据，同时支持：
-
-- 多规则 ACL 阻断
-- AES/SM4 双模式切换
-- 协议错误回退
-- 状态计数查询
+and it already supports:
+- multi-rule ACL
+- AES/SM4 mode switching
+- `16B / 32B` continuous encryption
+- protocol error fallback
+- stats query and counter readback
