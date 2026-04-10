@@ -4,7 +4,7 @@
 
 The current validated mainline is:
 
-`UART -> Parser -> 8-rule BRAM-backed ACL -> AES/SM4 (16B/32B/64B) -> UART + Stats Query + Rule-Stats Query`
+`UART -> Parser -> 8-rule BRAM-backed ACL -> BRAM-backed block-stream AES/SM4 (16B/32B/64B/128B) -> UART + Stats Query + Rule-Stats Query`
 
 This repository intentionally does not depend on:
 - `ARM/PS`
@@ -33,7 +33,8 @@ Implemented:
 - BRAM-backed ACL rule table
 - current default ACL entries: `X / Y / Z / W / P / R / T / U`
 - `AES-128` and `SM4-128`
-- single-block (`16B`), two-block (`32B`), and four-block (`64B`) encryption
+- block-stream bridge with BRAM ingress/egress FIFOs
+- single-block (`16B`), two-block (`32B`), four-block (`64B`), and eight-block (`128B`) encryption
 - protocol error fallback `E\n`
 - ACL block fallback `D\n`
 - stats query command `55 01 3F`
@@ -100,20 +101,20 @@ Board baseline:
 - `UART -> Parser -> ACL -> SM4 -> UART`
 - `UART -> Parser -> ACL -> AES/SM4 -> UART`
 - `UART -> Parser -> 4-rule ACL -> AES/SM4 -> UART + Stats Query`
-- `UART -> Parser -> 8-rule BRAM-backed ACL -> AES/SM4 (16B/32B/64B) -> UART + Stats Query + Rule-Stats Query`
+- `UART -> Parser -> 8-rule BRAM-backed ACL -> BRAM-backed block-stream AES/SM4 (16B/32B/64B/128B) -> UART + Stats Query + Rule-Stats Query`
 
 ## Explicitly Out of Scope
 
 - dynamic key download
 - `CBC`
-- payloads longer than `64B`
+- payloads longer than `128B`
 - `DMA / DDR / PBM`
 - `ARM/PS`
 - full `Ethernet/IP/UDP` protocol processing
 
 ## Quick Demo
 
-Program the current multiblock bitstream, then run:
+Program the current block-stream bitstream, then run:
 
 ```powershell
 py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --query-stats --expect-stats 0,0,0,0,0
@@ -125,20 +126,23 @@ py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --sm4-two-
 py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --aes-two-block-vector
 py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --sm4-four-block-vector
 py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --aes-four-block-vector
+py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --sm4-eight-block-vector
+py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --aes-eight-block-vector
 py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --invalid-selector
-py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --query-stats --expect-stats 7,1,3,3,1
+py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --query-stats --expect-stats 9,1,4,4,1
 ```
 
 ## Latest Verified Results
 
-Latest 64B multiblock build:
+Latest BRAM-backed block-stream build:
 - `DRC = 0`
-- `WNS = 5.691ns`
-- `WHS = 0.048ns`
-- `Slice LUTs = 6327`
-- `Slice Registers = 6238`
-- `Slice = 2411`
-- `BRAM = 0.5`
+- `WNS = 6.199ns`
+- `WHS = 0.031ns`
+- `Slice LUTs = 3432`
+- `Slice Registers = 4702`
+- `Slice = 1580`
+- `RAMB36E1 = 4`
+- `RAMB18E1 = 1`
 - `DSP = 0`
 
 Fresh BRAM-backed ACL smoke test:
@@ -185,6 +189,14 @@ Fresh 64B multiblock smoke:
 - `SM4 64B`: pass
 - `AES 64B`: pass
 - stats after the two 64B vectors:
+  - `53 02 00 01 01 00 0A`
+
+Fresh 128B block-stream smoke:
+- initial stats query:
+  - `53 00 00 00 00 00 0A`
+- `SM4 128B`: pass
+- `AES 128B`: pass
+- final stats query:
   - `53 02 00 01 01 00 0A`
 
 GUI real-board walkthrough verified:

@@ -25,7 +25,7 @@ module contest_acl_core (
     localparam [7:0] ASCII_D      = 8'h44;
     localparam [7:0] ASCII_NL     = 8'h0A;
 
-    (* ram_style = "block" *) reg [7:0] rule_table_q [0:255];
+    (* ram_style = "block" *) reg rule_table_q [0:255];
 
     reg [2:0] state_q;
     reg       drop_seen_last_q;
@@ -33,31 +33,31 @@ module contest_acl_core (
     reg       first_last_q;
     reg [7:0] lookup_addr_q;
     reg       lookup_req_q;
-    reg [7:0] lookup_data_q;
+    reg       lookup_data_q;
     reg       lookup_valid_q;
     reg       hold_valid_q;
     reg [7:0] hold_payload_q;
     reg       hold_last_q;
 
-    wire rule_hit = lookup_data_q[0];
+    wire rule_hit = lookup_data_q;
 
     integer idx;
 
     initial begin
         for (idx = 0; idx < 256; idx = idx + 1) begin
-            rule_table_q[idx] = 8'h00;
+            rule_table_q[idx] = 1'b0;
         end
 
         // Current default rules:
         // X / Y / Z / W / P / R / T / U => block.
-        rule_table_q[8'h58] = 8'h01;
-        rule_table_q[8'h59] = 8'h01;
-        rule_table_q[8'h5A] = 8'h01;
-        rule_table_q[8'h57] = 8'h01;
-        rule_table_q[8'h50] = 8'h01;
-        rule_table_q[8'h52] = 8'h01;
-        rule_table_q[8'h54] = 8'h01;
-        rule_table_q[8'h55] = 8'h01;
+        rule_table_q[8'h58] = 1'b1;
+        rule_table_q[8'h59] = 1'b1;
+        rule_table_q[8'h5A] = 1'b1;
+        rule_table_q[8'h57] = 1'b1;
+        rule_table_q[8'h50] = 1'b1;
+        rule_table_q[8'h52] = 1'b1;
+        rule_table_q[8'h54] = 1'b1;
+        rule_table_q[8'h55] = 1'b1;
     end
 
     always @(posedge clk) begin

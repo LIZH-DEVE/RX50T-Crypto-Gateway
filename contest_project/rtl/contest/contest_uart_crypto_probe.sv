@@ -20,6 +20,12 @@ module contest_uart_crypto_probe #(
     localparam       ALG_SM4     = 1'b0;
     localparam       ALG_AES     = 1'b1;
 
+    function automatic is_explicit_mode_length(input [7:0] payload_len);
+        begin
+            is_explicit_mode_length = (payload_len >= 8'd17) && (payload_len[3:0] == 4'h1);
+        end
+    endfunction
+
     wire       rx_valid;
     wire [7:0] rx_data;
     wire       rx_frame_error;
@@ -37,9 +43,6 @@ module contest_uart_crypto_probe #(
     reg        frame_query_q;
     reg        frame_rule_query_q;
     reg        frame_algo_sel_q;
-    reg        pending_data_stats_q;
-    reg        pending_data_algo_q;
-    reg  [7:0] pending_frame_key_q;
     reg        acl_block_seen_q;
 
     reg        acl_in_valid_q;
@@ -131,7 +134,7 @@ module contest_uart_crypto_probe #(
 
     contest_parser_core #(
         .SOF_BYTE         (8'h55),
-        .MAX_PAYLOAD_BYTES(128)
+        .MAX_PAYLOAD_BYTES(255)
     ) u_parser (
         .i_clk          (i_clk),
         .i_rst_n        (i_rst_n),
@@ -208,9 +211,6 @@ module contest_uart_crypto_probe #(
             frame_query_q         <= 1'b0;
             frame_rule_query_q    <= 1'b0;
             frame_algo_sel_q      <= ALG_SM4;
-            pending_data_stats_q  <= 1'b0;
-            pending_data_algo_q   <= ALG_SM4;
-            pending_frame_key_q   <= 8'd0;
             acl_block_seen_q      <= 1'b0;
             acl_in_valid_q        <= 1'b0;
             acl_in_data_q         <= 8'd0;
@@ -263,7 +263,7 @@ module contest_uart_crypto_probe #(
                         frame_query_q <= 1'b1;
                     end else if (parser_payload_len == 8'd1 && parser_payload_byte == ASCII_RULE) begin
                         frame_rule_query_q <= 1'b1;
-                    end else if ((parser_payload_len == 8'd17) || (parser_payload_len == 8'd33) || (parser_payload_len == 8'd65)) begin
+                    end else if (is_explicit_mode_length(parser_payload_len)) begin
                         if (parser_payload_byte == MODE_AES) begin
                             frame_algo_sel_q <= ALG_AES;
                         end else if (parser_payload_byte == MODE_SM4) begin
@@ -309,9 +309,27 @@ module contest_uart_crypto_probe #(
                     pending_error_q <= 1'b1;
                     stat_error_frames_q <= stat_error_frames_q + 8'd1;
                 end else begin
-                    pending_data_stats_q <= 1'b1;
-                    pending_data_algo_q  <= frame_algo_sel_q;
-                    pending_frame_key_q  <= frame_key_q;
+                    stat_total_frames_q <= stat_total_frames_q + 8'd1;
+                    if (acl_block_seen_q) begin
+                        stat_acl_blocks_q <= stat_acl_blocks_q + 8'd1;
+                        case (frame_key_q)
+                            8'h58: stat_rule_x_q <= stat_rule_x_q + 8'd1;
+                            8'h59: stat_rule_y_q <= stat_rule_y_q + 8'd1;
+                            8'h5A: stat_rule_z_q <= stat_rule_z_q + 8'd1;
+                            8'h57: stat_rule_w_q <= stat_rule_w_q + 8'd1;
+                            8'h50: stat_rule_p_q <= stat_rule_p_q + 8'd1;
+                            8'h52: stat_rule_r_q <= stat_rule_r_q + 8'd1;
+                            8'h54: stat_rule_t_q <= stat_rule_t_q + 8'd1;
+                            8'h55: stat_rule_u_q <= stat_rule_u_q + 8'd1;
+                            default: begin
+                            end
+                        endcase
+                    end else if (frame_algo_sel_q == ALG_AES) begin
+                        stat_aes_frames_q <= stat_aes_frames_q + 8'd1;
+                    end else begin
+                        stat_sm4_frames_q <= stat_sm4_frames_q + 8'd1;
+                    end
+                    acl_block_seen_q     <= 1'b0;
                 end
                 frame_key_valid_q     <= 1'b0;
                 frame_selector_seen_q <= 1'b0;
@@ -322,32 +340,6 @@ module contest_uart_crypto_probe #(
 
             if (acl_blocked) begin
                 acl_block_seen_q <= 1'b1;
-            end
-
-            if (pending_data_stats_q && acl_valid && acl_last) begin
-                stat_total_frames_q  <= stat_total_frames_q + 8'd1;
-                if (acl_block_seen_q) begin
-                    stat_acl_blocks_q <= stat_acl_blocks_q + 8'd1;
-                    case (pending_frame_key_q)
-                        8'h58: stat_rule_x_q <= stat_rule_x_q + 8'd1;
-                        8'h59: stat_rule_y_q <= stat_rule_y_q + 8'd1;
-                        8'h5A: stat_rule_z_q <= stat_rule_z_q + 8'd1;
-                        8'h57: stat_rule_w_q <= stat_rule_w_q + 8'd1;
-                        8'h50: stat_rule_p_q <= stat_rule_p_q + 8'd1;
-                        8'h52: stat_rule_r_q <= stat_rule_r_q + 8'd1;
-                        8'h54: stat_rule_t_q <= stat_rule_t_q + 8'd1;
-                        8'h55: stat_rule_u_q <= stat_rule_u_q + 8'd1;
-                        default: begin
-                        end
-                    endcase
-                end else if (pending_data_algo_q == ALG_AES) begin
-                    stat_aes_frames_q <= stat_aes_frames_q + 8'd1;
-                end else begin
-                    stat_sm4_frames_q <= stat_sm4_frames_q + 8'd1;
-                end
-                pending_data_stats_q <= 1'b0;
-                pending_frame_key_q  <= 8'd0;
-                acl_block_seen_q     <= 1'b0;
             end
 
             if (pending_error_q) begin

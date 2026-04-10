@@ -27,6 +27,8 @@ module tb_uart_crypto_probe;
         128'h681edf34d206965e86b3e94f536e4246,
         128'h09325c4853832dcb9337a5984f671b9a
     };
+    localparam logic [1023:0] SM4_8BLOCK_PT = {SM4_4BLOCK_PT, SM4_4BLOCK_PT};
+    localparam logic [1023:0] SM4_8BLOCK_CT = {SM4_4BLOCK_CT, SM4_4BLOCK_CT};
     localparam logic [255:0] AES_2BLOCK_PT = {
         128'h00112233445566778899aabbccddeeff,
         128'hffeeddccbbaa99887766554433221100
@@ -47,11 +49,14 @@ module tb_uart_crypto_probe;
         128'h69c4e0d86a7b0430d8cdb78070b4c55a,
         128'h1b872378795f4ffd772855fc87ca964d
     };
+    localparam logic [1023:0] AES_8BLOCK_PT = {AES_4BLOCK_PT, AES_4BLOCK_PT};
+    localparam logic [1023:0] AES_8BLOCK_CT = {AES_4BLOCK_CT, AES_4BLOCK_CT};
 
     reg clk;
     reg rst_n;
     reg uart_rx;
     wire uart_tx;
+    integer stage_q;
 
     rx50t_uart_crypto_probe_top #(
         .CLK_HZ(CLK_HZ),
@@ -66,6 +71,11 @@ module tb_uart_crypto_probe;
     initial begin
         clk = 1'b0;
         forever #(CLK_PERIODNS/2) clk = ~clk;
+    end
+
+    initial begin
+        #(200_000_000);
+        $fatal(1, "tb_uart_crypto_probe timeout at stage %0d", stage_q);
     end
 
     task automatic uart_send_byte(input [7:0] data);
@@ -110,10 +120,9 @@ module tb_uart_crypto_probe;
             end
             if (sample !== expected) begin
                 $fatal(1,
-                       "UART output mismatch. expected=0x%02x actual=0x%02x bridge_state=%0d active_algo=%0b frame_algo=%0b crypto_block=%032h tx_shift=%032h tx_count=%0d acl_in_valid=%0b acl_in_data=0x%02x acl_valid=%0b acl_data=0x%02x parser_len=%0d selector_seen=%0b proto_err=%0b",
+                       "UART output mismatch. expected=0x%02x actual=0x%02x active_algo=%0b frame_algo=%0b crypto_block=%032h tx_shift=%032h tx_count=%0d acl_in_valid=%0b acl_in_data=0x%02x acl_valid=%0b acl_data=0x%02x parser_len=%0d selector_seen=%0b proto_err=%0b",
                        expected,
                        sample,
-                       dut.u_probe.u_bridge.state_q,
                        dut.u_probe.u_bridge.active_algo_q,
                        dut.u_probe.frame_algo_sel_q,
                        dut.u_probe.u_bridge.crypto_block_q,
@@ -133,11 +142,13 @@ module tb_uart_crypto_probe;
     initial begin
         rst_n   = 1'b0;
         uart_rx = 1'b1;
+        stage_q = 0;
 
         #(20 * CLK_PERIODNS);
         rst_n = 1'b1;
         #(200 * CLK_PERIODNS);
 
+        stage_q = 1;
         // ACL blocked frame -> D\n
         fork
             begin
@@ -152,9 +163,11 @@ module tb_uart_crypto_probe;
                 uart_expect_byte(8'h0A);
             end
         join
+        $display("tb_uart_crypto_probe: ACL block passed");
 
         #(20 * BIT_PERIODNS);
 
+        stage_q = 2;
         // Default 16-byte frame -> SM4 ciphertext.
         fork
             begin
@@ -170,9 +183,11 @@ module tb_uart_crypto_probe;
                 end
             end
         join
+        $display("tb_uart_crypto_probe: SM4 16B passed");
 
         #(20 * BIT_PERIODNS);
 
+        stage_q = 3;
         // Explicit AES mode: 'A' + 16-byte plaintext -> AES ciphertext.
         fork
             begin
@@ -189,9 +204,11 @@ module tb_uart_crypto_probe;
                 end
             end
         join
+        $display("tb_uart_crypto_probe: AES 16B passed");
 
         #(20 * BIT_PERIODNS);
 
+        stage_q = 4;
         // Default 32-byte frame -> two-block SM4 ciphertext.
         fork
             begin
@@ -207,9 +224,11 @@ module tb_uart_crypto_probe;
                 end
             end
         join
+        $display("tb_uart_crypto_probe: SM4 32B passed");
 
         #(20 * BIT_PERIODNS);
 
+        stage_q = 5;
         // Explicit AES mode: 'A' + 32-byte plaintext -> two-block AES ciphertext.
         fork
             begin
@@ -226,9 +245,11 @@ module tb_uart_crypto_probe;
                 end
             end
         join
+        $display("tb_uart_crypto_probe: AES 32B passed");
 
         #(20 * BIT_PERIODNS);
 
+        stage_q = 6;
         // Default 64-byte frame -> four-block SM4 ciphertext.
         fork
             begin
@@ -244,9 +265,11 @@ module tb_uart_crypto_probe;
                 end
             end
         join
+        $display("tb_uart_crypto_probe: SM4 64B passed");
 
         #(20 * BIT_PERIODNS);
 
+        stage_q = 7;
         // Explicit AES mode: 'A' + 64-byte plaintext -> four-block AES ciphertext.
         fork
             begin
@@ -263,9 +286,52 @@ module tb_uart_crypto_probe;
                 end
             end
         join
+        $display("tb_uart_crypto_probe: AES 64B passed");
 
         #(20 * BIT_PERIODNS);
 
+        stage_q = 8;
+        // Default 128-byte frame -> eight-block SM4 ciphertext.
+        fork
+            begin
+                uart_send_byte(8'h55);
+                uart_send_byte(8'd128);
+                for (int send_idx = 0; send_idx < 128; send_idx = send_idx + 1) begin
+                    uart_send_byte(SM4_8BLOCK_PT[1023 - (send_idx*8) -: 8]);
+                end
+            end
+            begin
+                for (int recv_idx = 0; recv_idx < 128; recv_idx = recv_idx + 1) begin
+                    uart_expect_byte(SM4_8BLOCK_CT[1023 - (recv_idx*8) -: 8]);
+                end
+            end
+        join
+        $display("tb_uart_crypto_probe: SM4 128B passed");
+
+        #(20 * BIT_PERIODNS);
+
+        stage_q = 9;
+        // Explicit AES mode: 'A' + 128-byte plaintext -> eight-block AES ciphertext.
+        fork
+            begin
+                uart_send_byte(8'h55);
+                uart_send_byte(8'd129);
+                uart_send_byte(8'h41);
+                for (int send_idx = 0; send_idx < 128; send_idx = send_idx + 1) begin
+                    uart_send_byte(AES_8BLOCK_PT[1023 - (send_idx*8) -: 8]);
+                end
+            end
+            begin
+                for (int recv_idx = 0; recv_idx < 128; recv_idx = recv_idx + 1) begin
+                    uart_expect_byte(AES_8BLOCK_CT[1023 - (recv_idx*8) -: 8]);
+                end
+            end
+        join
+        $display("tb_uart_crypto_probe: AES 128B passed");
+
+        #(20 * BIT_PERIODNS);
+
+        stage_q = 10;
         // New default BRAM-backed rule: P should also block.
         fork
             begin
@@ -280,9 +346,11 @@ module tb_uart_crypto_probe;
                 uart_expect_byte(8'h0A);
             end
         join
+        $display("tb_uart_crypto_probe: BRAM rule P passed");
 
         #(20 * BIT_PERIODNS);
 
+        stage_q = 11;
         // Invalid explicit selector -> E\n
         fork
             begin
@@ -298,9 +366,11 @@ module tb_uart_crypto_probe;
                 uart_expect_byte(8'h0A);
             end
         join
+        $display("tb_uart_crypto_probe: invalid selector passed");
 
         #(20 * BIT_PERIODNS);
 
+        stage_q = 12;
         // Add one extra BRAM-backed rule dynamically and verify the top-level
         // stats follow the ACL output instead of a hardcoded key list.
         dut.u_probe.u_acl.rule_table_q[8'h51] = 8'h01; // Q -> block
@@ -317,9 +387,11 @@ module tb_uart_crypto_probe;
                 uart_expect_byte(8'h0A);
             end
         join
+        $display("tb_uart_crypto_probe: dynamic rule Q counter query passed");
 
         #(20 * BIT_PERIODNS);
 
+        stage_q = 13;
         // Query counters -> S total acl aes sm4 err \n
         fork
             begin
@@ -340,9 +412,11 @@ module tb_uart_crypto_probe;
                 uart_expect_byte(8'h0A);
             end
         join
+        $display("tb_uart_crypto_probe: aggregate stats query passed");
 
         #(20 * BIT_PERIODNS);
 
+        stage_q = 14;
         // Query aggregate counters -> S total acl aes sm4 err \n
         fork
             begin
@@ -352,10 +426,10 @@ module tb_uart_crypto_probe;
             end
             begin
                 uart_expect_byte(8'h53);
-                uart_expect_byte(8'h09);
+                uart_expect_byte(8'h0B);
                 uart_expect_byte(8'h03);
-                uart_expect_byte(8'h03);
-                uart_expect_byte(8'h03);
+                uart_expect_byte(8'h04);
+                uart_expect_byte(8'h04);
                 uart_expect_byte(8'h01);
                 uart_expect_byte(8'h0A);
             end

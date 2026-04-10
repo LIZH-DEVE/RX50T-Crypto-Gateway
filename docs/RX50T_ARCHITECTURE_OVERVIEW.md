@@ -9,7 +9,7 @@ Main datapath:
 ```text
 UART RX
 -> Parser
--> ACL
+-> 8-rule BRAM-backed ACL
 -> Crypto Bridge
 -> AES/SM4 Core
 -> UART TX
@@ -53,7 +53,7 @@ Feeds:
 Role:
 - apply a minimal rule match on the first payload byte
 - decide pass-through or block
-- currently supports `4` fixed block rules
+- currently uses an `8`-entry BRAM-backed rule table
 
 Feeds:
 - `Crypto Bridge`
@@ -61,11 +61,13 @@ Feeds:
 ### Crypto Bridge
 
 Role:
-- gather `8-bit` data into `128-bit` blocks
-- trigger the selected crypto core
+- pack incoming `8-bit` data into `128-bit` blocks
+- buffer plaintext blocks in a BRAM-backed ingress FIFO
+- trigger a single-block crypto worker
+- buffer ciphertext blocks in a BRAM-backed egress FIFO
 - scatter `128-bit` ciphertext back into `8-bit` UART bytes
 - bypass encryption for short control frames
-- currently supports up to two consecutive `128-bit` blocks
+- currently verifies `1 / 2 / 4 / 8` consecutive `128-bit` blocks
 
 Feeds:
 - `UART TX`
@@ -107,6 +109,12 @@ SOF(0x55) + LEN + PAYLOAD
 - `LEN = 32`
 - payload is two consecutive `SM4` plaintext blocks
 
+- `LEN = 64`
+- payload is four consecutive `SM4` plaintext blocks
+
+- `LEN = 128`
+- payload is eight consecutive `SM4` plaintext blocks
+
 ### Explicit AES Mode
 
 - `LEN = 17`
@@ -117,6 +125,14 @@ SOF(0x55) + LEN + PAYLOAD
 - payload byte `0` = `0x41 ('A')`
 - next `32B` = two consecutive AES plaintext blocks
 
+- `LEN = 65`
+- payload byte `0` = `0x41 ('A')`
+- next `64B` = four consecutive AES plaintext blocks
+
+- `LEN = 129`
+- payload byte `0` = `0x41 ('A')`
+- next `128B` = eight consecutive AES plaintext blocks
+
 ### Explicit SM4 Mode
 
 - `LEN = 17`
@@ -126,6 +142,14 @@ SOF(0x55) + LEN + PAYLOAD
 - `LEN = 33`
 - payload byte `0` = `0x53 ('S')`
 - next `32B` = two consecutive SM4 plaintext blocks
+
+- `LEN = 65`
+- payload byte `0` = `0x53 ('S')`
+- next `64B` = four consecutive SM4 plaintext blocks
+
+- `LEN = 129`
+- payload byte `0` = `0x53 ('S')`
+- next `128B` = eight consecutive SM4 plaintext blocks
 
 ### Block and Error Replies
 
@@ -147,16 +171,21 @@ SOF(0x55) + LEN + PAYLOAD
 
 ### ACL
 
-- currently a `4`-rule fixed matcher
-- upgrades the design from a single-rule demo to a small hardware rule engine
+- currently an `8`-entry BRAM-backed matcher
+- upgrades the design from a single-rule demo to a small hardware rule engine without growing LUT fan-out
 
 ### Crypto Bridge
 
 - avoids complex control protocol
 - avoids dynamic key management
 - avoids hardware padding
-- currently focuses on `1~2` `128-bit` blocks
-- uses a clean `gather -> encrypt -> scatter` pipeline to keep the datapath deterministic
+- uses a BRAM-backed block-stream structure:
+  - `16B` packer
+  - ingress FIFO
+  - single-block crypto worker
+  - egress FIFO
+  - byte scatter
+- current verified payload sizes are `16B / 32B / 64B / 128B`
 
 ### AES/SM4
 
@@ -195,6 +224,8 @@ The system is no longer just a set of isolated modules. It is now a real closed 
 - AES/SM4 works
 - UART output works
 - stats readback works
+- rule-counter readback works
+- BRAM-backed block-stream multiblock encryption is verified through `128B`
 
 Because of that, the current `RX50T` version can already serve as:
 - the main contest architecture

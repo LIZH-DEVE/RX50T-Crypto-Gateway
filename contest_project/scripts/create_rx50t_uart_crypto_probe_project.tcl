@@ -27,6 +27,7 @@ add_files -norecurse {
     D:/FPGAhanjia/jichuangsai/contest_project/rtl/contest/contest_uart_tx.sv
     D:/FPGAhanjia/jichuangsai/contest_project/rtl/contest/contest_parser_core.sv
     D:/FPGAhanjia/jichuangsai/contest_project/rtl/contest/contest_acl_core.sv
+    D:/FPGAhanjia/jichuangsai/contest_project/rtl/contest/contest_block_fifo.sv
     D:/FPGAhanjia/jichuangsai/contest_project/rtl/contest/contest_crypto_bridge.sv
     D:/FPGAhanjia/jichuangsai/contest_project/rtl/contest/contest_uart_crypto_probe.sv
     D:/FPGAhanjia/jichuangsai/contest_project/rtl/contest/rx50t_uart_crypto_probe_top.sv

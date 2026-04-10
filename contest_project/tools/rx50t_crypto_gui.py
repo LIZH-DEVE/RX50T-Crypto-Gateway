@@ -10,6 +10,7 @@ from crypto_gateway_protocol import (
     AclRuleCounters,
     DEFAULT_ACL_RULES,
     StatsCounters,
+    case_aes_eight_block_vector,
     case_aes_four_block_vector,
     case_aes_known_vector,
     case_aes_two_block_vector,
@@ -17,6 +18,7 @@ from crypto_gateway_protocol import (
     case_invalid_selector,
     case_query_rule_stats,
     case_query_stats,
+    case_sm4_eight_block_vector,
     case_sm4_four_block_vector,
     case_sm4_known_vector,
     case_sm4_two_block_vector,
@@ -110,16 +112,18 @@ class CryptoGatewayApp(tk.Tk):
         ttk.Button(actions, text="AES 32B", command=lambda: self._submit_case(case_aes_two_block_vector())).grid(row=1, column=1, sticky="ew", padx=4, pady=4)
         ttk.Button(actions, text="SM4 64B", command=lambda: self._submit_case(case_sm4_four_block_vector())).grid(row=1, column=2, sticky="ew", padx=4, pady=4)
         ttk.Button(actions, text="AES 64B", command=lambda: self._submit_case(case_aes_four_block_vector())).grid(row=1, column=3, sticky="ew", padx=4, pady=4)
+        ttk.Button(actions, text="SM4 128B", command=lambda: self._submit_case(case_sm4_eight_block_vector())).grid(row=2, column=0, sticky="ew", padx=4, pady=4)
+        ttk.Button(actions, text="AES 128B", command=lambda: self._submit_case(case_aes_eight_block_vector())).grid(row=2, column=1, sticky="ew", padx=4, pady=4)
 
         acl_frame = ttk.Frame(actions)
-        acl_frame.grid(row=2, column=0, columnspan=5, sticky="ew", padx=4, pady=4)
+        acl_frame.grid(row=3, column=0, columnspan=5, sticky="ew", padx=4, pady=4)
         acl_frame.columnconfigure(1, weight=1)
         ttk.Label(acl_frame, text="ACL Probe").grid(row=0, column=0, padx=(0, 8))
         ttk.Entry(acl_frame, textvariable=self.acl_text, width=14).grid(row=0, column=1, padx=(0, 8), sticky="ew")
         ttk.Button(acl_frame, text="Send Block Test", command=self._send_acl_probe).grid(row=0, column=2)
 
         acl_rules = ttk.LabelFrame(actions, text="Compiled ACL Rule Table (BRAM + Hardware Counters)", padding=10)
-        acl_rules.grid(row=3, column=0, columnspan=5, sticky="ew", padx=4, pady=(8, 0))
+        acl_rules.grid(row=4, column=0, columnspan=5, sticky="ew", padx=4, pady=(8, 0))
         ttk.Label(
             acl_rules,
             text="Current bitstream default blocked first-byte keys. Use 'Query Rule Hits' to refresh board counters:",
@@ -219,7 +223,7 @@ class CryptoGatewayApp(tk.Tk):
         ttk.Combobox(file_frame, textvariable=self.file_algo, values=["SM4", "AES"], state="readonly", width=8).grid(row=0, column=1, sticky="w")
         ttk.Label(
             file_frame,
-            text="Only files whose byte length is a multiple of 16 are accepted.\nThe GUI chunks them into 64B/32B/16B transactions automatically.",
+            text="Only files whose byte length is a multiple of 16 are accepted.\nThe GUI chunks them into 240B/128B/64B/32B/16B transactions automatically.",
             justify="left",
             wraplength=280,
         ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(12, 12))

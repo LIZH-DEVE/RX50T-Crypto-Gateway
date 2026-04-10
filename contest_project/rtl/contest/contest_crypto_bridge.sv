@@ -21,13 +21,9 @@ module contest_crypto_bridge (
     localparam ALG_SM4 = 1'b0;
     localparam ALG_AES = 1'b1;
 
-    localparam [1:0] ST_RX_GATHER  = 2'd0;
-    localparam [1:0] ST_ENCRYPT    = 2'd1;
-    localparam [1:0] ST_TX_SCATTER = 2'd2;
-
-    localparam integer BLOCK_BYTES = 16;
-    localparam integer MAX_BYTES   = 64;
-    localparam integer MAX_BLOCKS  = 4;
+    localparam integer BLOCK_BYTES      = 16;
+    localparam integer BLOCK_FIFO_DEPTH = 64;
+    localparam integer BLOCK_FIFO_AW    = 6;
 
     localparam [2:0] AES_BOOT_INIT      = 3'd0;
     localparam [2:0] AES_BOOT_WAIT_BUSY = 3'd1;
@@ -37,23 +33,46 @@ module contest_crypto_bridge (
     localparam [2:0] AES_RUN_WAIT_BUSY  = 3'd5;
     localparam [2:0] AES_RUN_WAIT_DONE  = 3'd6;
 
-    reg [1:0]   state_q;
-    reg [511:0] gather_shift_q;
-    reg [6:0]   gather_count_q;
-    reg [511:0] frame_data_q;
-    reg [511:0] result_shift_q;
-    reg [511:0] tx_shift_q;
-    reg [6:0]   tx_count_q;
-    reg [2:0]   block_count_q;
-    reg [2:0]   block_index_q;
-    reg [127:0] crypto_block_q;
+    function automatic [127:0] block_insert_byte(
+        input [127:0] cur,
+        input [3:0]   byte_idx,
+        input [7:0]   byte_val
+    );
+        reg [127:0] tmp;
+        begin
+            tmp = cur;
+            tmp[127 - (byte_idx * 8) -: 8] = byte_val;
+            block_insert_byte = tmp;
+        end
+    endfunction
+
+    reg [127:0] gather_shift_q;
+    reg [3:0]   gather_count_q;
+
+    reg [127:0] raw_shift_q;
+    reg [4:0]   raw_count_q;
+    reg         raw_pending_q;
+
+    reg [127:0] tx_shift_q;
+    reg [4:0]   tx_count_q;
+    reg         tx_last_q;
+    reg [7:0]   tx_byte_q;
+    reg         tx_byte_valid_q;
+    reg         tx_byte_last_q;
+
+    reg         worker_busy_q;
+    reg         ingress_fetch_pending_q;
+    reg         egress_fetch_pending_q;
     reg         active_algo_q;
+    reg         worker_last_q;
+    reg [127:0] crypto_block_q;
 
     reg         sm4_key_sent_q;
     reg         sm4_user_key_valid_q;
     reg         sm4_start_seen_q;
     reg         sm4_wait_done_clear_q;
     reg [2:0]   sm4_valid_burst_q;
+
     reg [2:0]   aes_state_q;
     reg         aes_init_q;
     reg         aes_next_q;
@@ -66,44 +85,69 @@ module contest_crypto_bridge (
     wire         aes_result_valid;
     wire [127:0] aes_result;
 
-    function automatic [127:0] block_from_frame(
-        input [511:0] frame,
-        input [2:0]   idx
-    );
-        begin
-            case (idx)
-                3'd0: block_from_frame = frame[511:384];
-                3'd1: block_from_frame = frame[383:256];
-                3'd2: block_from_frame = frame[255:128];
-                3'd3: block_from_frame = frame[127:0];
-                default: block_from_frame = 128'd0;
-            endcase
-        end
-    endfunction
+    wire [4:0]   gather_count_next_w;
+    wire         short_raw_flush_w;
 
-    function automatic [511:0] store_block_into_frame(
-        input [511:0] frame,
-        input [2:0]   idx,
-        input [127:0] block
-    );
-        begin
-            store_block_into_frame = frame;
-            case (idx)
-                3'd0: store_block_into_frame[511:384] = block;
-                3'd1: store_block_into_frame[383:256] = block;
-                3'd2: store_block_into_frame[255:128] = block;
-                3'd3: store_block_into_frame[127:0]   = block;
-                default: begin
-                end
-            endcase
-        end
-    endfunction
+    assign gather_count_next_w = gather_count_q + 5'd1;
+    assign short_raw_flush_w   = acl_valid && acl_last && (gather_count_next_w < BLOCK_BYTES);
+
+    reg          ingress_wr_en_q;
+    reg  [129:0] ingress_wr_data_q;
+    reg          ingress_rd_en_q;
+    wire [129:0] ingress_rd_data_w;
+    wire         ingress_rd_valid_w;
+    wire         ingress_full_w;
+    wire         ingress_empty_w;
+    wire [BLOCK_FIFO_AW:0] ingress_level_w;
+
+    reg          egress_wr_en_q;
+    reg  [128:0] egress_wr_data_q;
+    reg          egress_rd_en_q;
+    wire [128:0] egress_rd_data_w;
+    wire         egress_rd_valid_w;
+    wire         egress_full_w;
+    wire         egress_empty_w;
+    wire [BLOCK_FIFO_AW:0] egress_level_w;
 
     assign sm4_valid_in =
-        (state_q == ST_ENCRYPT) &&
+        worker_busy_q &&
         (active_algo_q == ALG_SM4) &&
         sm4_start_seen_q &&
         (sm4_valid_burst_q != 3'd0);
+
+    contest_block_fifo #(
+        .WIDTH (130),
+        .DEPTH (BLOCK_FIFO_DEPTH),
+        .ADDR_W(BLOCK_FIFO_AW)
+    ) u_ingress_fifo (
+        .clk    (clk),
+        .rst_n  (rst_n),
+        .wr_en  (ingress_wr_en_q),
+        .wr_data(ingress_wr_data_q),
+        .full   (ingress_full_w),
+        .rd_en  (ingress_rd_en_q),
+        .rd_data(ingress_rd_data_w),
+        .rd_valid(ingress_rd_valid_w),
+        .empty  (ingress_empty_w),
+        .level  (ingress_level_w)
+    );
+
+    contest_block_fifo #(
+        .WIDTH (129),
+        .DEPTH (BLOCK_FIFO_DEPTH),
+        .ADDR_W(BLOCK_FIFO_AW)
+    ) u_egress_fifo (
+        .clk    (clk),
+        .rst_n  (rst_n),
+        .wr_en  (egress_wr_en_q),
+        .wr_data(egress_wr_data_q),
+        .full   (egress_full_w),
+        .rd_en  (egress_rd_en_q),
+        .rd_data(egress_rd_data_w),
+        .rd_valid(egress_rd_valid_w),
+        .empty  (egress_empty_w),
+        .level  (egress_level_w)
+    );
 
     aes_core u_aes (
         .clk         (clk),
@@ -123,7 +167,7 @@ module contest_crypto_bridge (
         .clk               (clk),
         .reset_n           (rst_n),
         .sm4_enable_in     (1'b1),
-        .encdec_enable_in  ((state_q == ST_ENCRYPT) && (active_algo_q == ALG_SM4)),
+        .encdec_enable_in  (worker_busy_q && (active_algo_q == ALG_SM4)),
         .encdec_sel_in     (1'b0),
         .valid_in          (sm4_valid_in),
         .data_in           (crypto_block_q),
@@ -135,39 +179,61 @@ module contest_crypto_bridge (
         .result_out        (sm4_result)
     );
 
-    always @(posedge clk or negedge rst_n) begin
-        reg [511:0] next_shift;
-        reg [511:0] aligned_frame;
-        reg [511:0] next_result_shift;
-        reg [6:0]   next_count;
-        reg [2:0]   next_block_count;
+    always @(posedge clk) begin
         if (!rst_n) begin
-            state_q              <= ST_RX_GATHER;
-            gather_shift_q       <= 512'd0;
-            gather_count_q       <= 7'd0;
-            frame_data_q         <= 512'd0;
-            result_shift_q       <= 512'd0;
-            tx_shift_q           <= 512'd0;
-            tx_count_q           <= 7'd0;
-            block_count_q        <= 3'd0;
-            block_index_q        <= 3'd0;
-            crypto_block_q       <= 128'd0;
+            gather_shift_q       <= 128'd0;
+            gather_count_q       <= 4'd0;
+
+            raw_shift_q          <= 128'd0;
+            raw_count_q          <= 5'd0;
+            raw_pending_q        <= 1'b0;
+
+            tx_shift_q           <= 128'd0;
+            tx_count_q           <= 5'd0;
+            tx_last_q            <= 1'b0;
+            tx_byte_q            <= 8'd0;
+            tx_byte_valid_q      <= 1'b0;
+            tx_byte_last_q       <= 1'b0;
+
+            worker_busy_q        <= 1'b0;
+            ingress_fetch_pending_q <= 1'b0;
+            egress_fetch_pending_q  <= 1'b0;
             active_algo_q        <= ALG_SM4;
+            worker_last_q        <= 1'b0;
+            crypto_block_q       <= 128'd0;
+
             sm4_key_sent_q       <= 1'b0;
             sm4_user_key_valid_q <= 1'b0;
             sm4_start_seen_q     <= 1'b0;
             sm4_wait_done_clear_q<= 1'b0;
             sm4_valid_burst_q    <= 3'd0;
+
             aes_state_q          <= AES_BOOT_INIT;
             aes_init_q           <= 1'b0;
             aes_next_q           <= 1'b0;
+            ingress_wr_en_q      <= 1'b0;
+            ingress_wr_data_q    <= 130'd0;
+            ingress_rd_en_q      <= 1'b0;
+            egress_wr_en_q       <= 1'b0;
+            egress_wr_data_q     <= 129'd0;
+            egress_rd_en_q       <= 1'b0;
+
             bridge_valid         <= 1'b0;
             bridge_data          <= 8'd0;
             bridge_last          <= 1'b0;
         end else begin
+            bridge_valid         <= tx_byte_valid_q;
+            bridge_data          <= tx_byte_q;
+            bridge_last          <= tx_byte_last_q;
             sm4_user_key_valid_q <= 1'b0;
             aes_init_q           <= 1'b0;
             aes_next_q           <= 1'b0;
+            ingress_wr_en_q      <= 1'b0;
+            ingress_wr_data_q    <= 130'd0;
+            ingress_rd_en_q      <= 1'b0;
+            egress_wr_en_q       <= 1'b0;
+            egress_wr_data_q     <= 129'd0;
+            egress_rd_en_q       <= 1'b0;
 
             if (!sm4_key_sent_q) begin
                 sm4_user_key_valid_q <= 1'b1;
@@ -193,7 +259,7 @@ module contest_crypto_bridge (
                 end
 
                 AES_IDLE: begin
-                    if ((state_q == ST_ENCRYPT) && (active_algo_q == ALG_AES)) begin
+                    if (worker_busy_q && (active_algo_q == ALG_AES)) begin
                         aes_state_q <= AES_RUN_PULSE;
                     end
                 end
@@ -220,128 +286,108 @@ module contest_crypto_bridge (
                 end
             endcase
 
-            case (state_q)
-                ST_RX_GATHER: begin
-                    bridge_valid      <= 1'b0;
-                    bridge_data       <= 8'd0;
-                    bridge_last       <= 1'b0;
-                    active_algo_q     <= ALG_SM4;
-                    sm4_start_seen_q  <= 1'b0;
-                    sm4_wait_done_clear_q <= 1'b0;
-                    sm4_valid_burst_q <= 3'd0;
+            if (sm4_wait_done_clear_q && !sm4_done) begin
+                sm4_wait_done_clear_q <= 1'b0;
+            end
 
-                    if (acl_valid) begin
-                        next_shift = {gather_shift_q[503:0], acl_data};
-                        next_count = gather_count_q + 7'd1;
-
-                        if (next_count <= MAX_BYTES) begin
-                            if (acl_last && ((next_count < BLOCK_BYTES) || ((next_count % BLOCK_BYTES) != 0))) begin
-                                tx_shift_q     <= next_shift << ((MAX_BYTES - next_count) * 8);
-                                tx_count_q     <= next_count;
-                                gather_shift_q <= 512'd0;
-                                gather_count_q <= 7'd0;
-                                state_q        <= ST_TX_SCATTER;
-                            end else if (acl_last && ((next_count % BLOCK_BYTES) == 0)) begin
-                                aligned_frame    = next_shift << ((MAX_BYTES - next_count) * 8);
-                                next_block_count = next_count / BLOCK_BYTES;
-                                active_algo_q    <= i_algo_sel;
-                                frame_data_q     <= aligned_frame;
-                                result_shift_q   <= 512'd0;
-                                block_count_q    <= next_block_count;
-                                block_index_q    <= 3'd0;
-                                crypto_block_q   <= aligned_frame[511:384];
-                                gather_shift_q   <= 512'd0;
-                                gather_count_q   <= 7'd0;
-                                state_q          <= ST_ENCRYPT;
-                            end else begin
-                                gather_shift_q <= next_shift;
-                                gather_count_q <= next_count;
-                            end
-                        end
+            if (acl_valid) begin
+                if (gather_count_next_w == BLOCK_BYTES) begin
+                    if (!ingress_full_w) begin
+                        ingress_wr_en_q   <= 1'b1;
+                        ingress_wr_data_q <= {i_algo_sel, acl_last,
+                                              block_insert_byte(gather_shift_q, gather_count_q, acl_data)};
+                    end
+                    gather_shift_q <= 128'd0;
+                    gather_count_q <= 4'd0;
+                end else begin
+                    gather_shift_q <= block_insert_byte(gather_shift_q, gather_count_q, acl_data);
+                    gather_count_q <= gather_count_next_w[3:0];
+                    if (acl_last) begin
+                        raw_shift_q   <= block_insert_byte(gather_shift_q, gather_count_q, acl_data);
+                        raw_count_q   <= gather_count_next_w[4:0];
+                        raw_pending_q <= 1'b1;
+                        gather_shift_q<= 128'd0;
+                        gather_count_q<= 4'd0;
                     end
                 end
+            end
 
-                ST_ENCRYPT: begin
-                    bridge_valid <= 1'b0;
-                    bridge_data  <= 8'd0;
-                    bridge_last  <= 1'b0;
+            if (!worker_busy_q && !ingress_fetch_pending_q && !ingress_empty_w &&
+                (aes_state_q == AES_IDLE) && !sm4_wait_done_clear_q) begin
+                ingress_rd_en_q          <= 1'b1;
+                ingress_fetch_pending_q  <= 1'b1;
+            end
 
-                    if (active_algo_q == ALG_SM4) begin
-                        if (sm4_wait_done_clear_q) begin
-                            if (!sm4_done) begin
-                                sm4_wait_done_clear_q <= 1'b0;
-                            end
-                        end else if (sm4_key_ready && !sm4_start_seen_q) begin
+            if (ingress_rd_valid_w) begin
+                crypto_block_q           <= ingress_rd_data_w[127:0];
+                worker_last_q            <= ingress_rd_data_w[128];
+                active_algo_q            <= ingress_rd_data_w[129];
+                worker_busy_q            <= 1'b1;
+                ingress_fetch_pending_q  <= 1'b0;
+                sm4_start_seen_q         <= 1'b0;
+                sm4_valid_burst_q        <= 3'd0;
+            end
+
+            if (worker_busy_q) begin
+                if (active_algo_q == ALG_SM4) begin
+                    if (!sm4_wait_done_clear_q) begin
+                        if (sm4_key_ready && !sm4_start_seen_q) begin
                             sm4_start_seen_q  <= 1'b1;
                             sm4_valid_burst_q <= 3'd4;
                         end else if (sm4_valid_burst_q != 3'd0) begin
                             sm4_valid_burst_q <= sm4_valid_burst_q - 3'd1;
                         end
-
-                        if (sm4_done) begin
-                            next_result_shift = store_block_into_frame(result_shift_q, block_index_q, sm4_result);
-                            result_shift_q <= next_result_shift;
-
-                            sm4_start_seen_q  <= 1'b0;
-                            sm4_valid_burst_q <= 3'd0;
-
-                            if ((block_index_q + 3'd1) < block_count_q) begin
-                                block_index_q         <= block_index_q + 3'd1;
-                                crypto_block_q        <= block_from_frame(frame_data_q, block_index_q + 3'd1);
-                                sm4_wait_done_clear_q <= 1'b1;
-                            end else begin
-                                tx_shift_q <= next_result_shift;
-                                tx_count_q <= block_count_q * BLOCK_BYTES;
-                                state_q    <= ST_TX_SCATTER;
-                            end
-                        end
-                    end else begin
-                        sm4_start_seen_q      <= 1'b0;
-                        sm4_wait_done_clear_q <= 1'b0;
-                        sm4_valid_burst_q     <= 3'd0;
-
-                        if (aes_result_valid && (aes_state_q == AES_RUN_WAIT_DONE)) begin
-                            next_result_shift = store_block_into_frame(result_shift_q, block_index_q, aes_result);
-                            result_shift_q <= next_result_shift;
-
-                            if ((block_index_q + 3'd1) < block_count_q) begin
-                                block_index_q  <= block_index_q + 3'd1;
-                                crypto_block_q <= block_from_frame(frame_data_q, block_index_q + 3'd1);
-                            end else begin
-                                tx_shift_q <= next_result_shift;
-                                tx_count_q <= block_count_q * BLOCK_BYTES;
-                                state_q    <= ST_TX_SCATTER;
-                            end
-                        end
                     end
-                end
 
-                ST_TX_SCATTER: begin
-                    if (!bridge_valid && (tx_count_q != 7'd0)) begin
-                        bridge_valid <= 1'b1;
-                        bridge_data  <= tx_shift_q[511:504];
-                        bridge_last  <= (tx_count_q == 7'd1);
-                    end else if (bridge_valid && uart_tx_ready) begin
-                        bridge_valid <= 1'b0;
-                        tx_shift_q   <= {tx_shift_q[503:0], 8'h00};
-                        tx_count_q   <= tx_count_q - 7'd1;
-
-                        if (tx_count_q == 7'd1) begin
-                            bridge_data   <= 8'd0;
-                            bridge_last   <= 1'b0;
-                            frame_data_q  <= 512'd0;
-                            result_shift_q<= 512'd0;
-                            block_count_q <= 3'd0;
-                            block_index_q <= 3'd0;
-                            state_q       <= ST_RX_GATHER;
-                        end
+                    if (sm4_done && !egress_full_w) begin
+                        egress_wr_en_q         <= 1'b1;
+                        egress_wr_data_q       <= {worker_last_q, sm4_result};
+                        worker_busy_q          <= 1'b0;
+                        sm4_start_seen_q       <= 1'b0;
+                        sm4_valid_burst_q      <= 3'd0;
+                        sm4_wait_done_clear_q  <= 1'b1;
                     end
+                end else if (aes_result_valid && (aes_state_q == AES_RUN_WAIT_DONE) && !egress_full_w) begin
+                    egress_wr_en_q    <= 1'b1;
+                    egress_wr_data_q  <= {worker_last_q, aes_result};
+                    worker_busy_q     <= 1'b0;
                 end
+            end
 
-                default: begin
-                    state_q <= ST_RX_GATHER;
+            if (tx_count_q == 5'd0) begin
+                if (raw_pending_q) begin
+                    tx_shift_q    <= raw_shift_q;
+                    tx_count_q    <= raw_count_q;
+                    tx_last_q     <= 1'b1;
+                    raw_pending_q <= 1'b0;
+                    raw_shift_q   <= 128'd0;
+                    raw_count_q   <= 5'd0;
+                end else if (egress_rd_valid_w) begin
+                    tx_shift_q            <= egress_rd_data_w[127:0];
+                    tx_count_q            <= 5'd16;
+                    tx_last_q             <= egress_rd_data_w[128];
+                    egress_fetch_pending_q<= 1'b0;
+                end else if (!egress_fetch_pending_q && !egress_empty_w && !short_raw_flush_w) begin
+                    egress_rd_en_q         <= 1'b1;
+                    egress_fetch_pending_q <= 1'b1;
                 end
-            endcase
+            end
+
+            if (tx_byte_valid_q && uart_tx_ready) begin
+                tx_byte_valid_q <= 1'b0;
+                tx_byte_last_q  <= 1'b0;
+            end
+
+            if (!tx_byte_valid_q && (tx_count_q != 5'd0)) begin
+                tx_byte_q       <= tx_shift_q[127:120];
+                tx_byte_valid_q <= 1'b1;
+                tx_byte_last_q  <= (tx_count_q == 5'd1) && tx_last_q;
+                tx_shift_q      <= {tx_shift_q[119:0], 8'h00};
+                tx_count_q      <= tx_count_q - 5'd1;
+                if (tx_count_q == 5'd1) begin
+                    tx_last_q <= 1'b0;
+                end
+            end
         end
     end
 

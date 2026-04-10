@@ -23,6 +23,10 @@ AES128_PT4 = AES128_PT + AES128_PT2 + AES128_PT + AES128_PT2
 AES128_CT4 = AES128_CT + AES128_CT2 + AES128_CT + AES128_CT2
 SM4_PT4 = SM4_PT + SM4_PT2 + SM4_PT + SM4_PT2
 SM4_CT4 = SM4_CT + SM4_CT2 + SM4_CT + SM4_CT2
+AES128_PT8 = AES128_PT4 + AES128_PT4
+AES128_CT8 = AES128_CT4 + AES128_CT4
+SM4_PT8 = SM4_PT4 + SM4_PT4
+SM4_CT8 = SM4_CT4 + SM4_CT4
 DEFAULT_ACL_RULES = ("X", "Y", "Z", "W", "P", "R", "T", "U")
 
 
@@ -100,8 +104,8 @@ class ProbeResult:
 def build_frame(payload: bytes) -> bytes:
     if not payload:
         raise ValueError("payload must not be empty")
-    if len(payload) > 128:
-        raise ValueError("payload length must be <= 128 bytes")
+    if len(payload) > 255:
+        raise ValueError("payload length must be <= 255 bytes")
     return bytes([0x55, len(payload)]) + payload
 
 
@@ -152,7 +156,11 @@ def split_blocks_for_transport(payload: bytes) -> list[bytes]:
     index = 0
     while index < len(payload):
         remaining = len(payload) - index
-        if remaining >= 64:
+        if remaining >= 240:
+            chunk_len = 240
+        elif remaining >= 128:
+            chunk_len = 128
+        elif remaining >= 64:
             chunk_len = 64
         elif remaining >= 32:
             chunk_len = 32
@@ -233,6 +241,26 @@ def case_aes_four_block_vector() -> ProbeCase:
     )
 
 
+def case_sm4_eight_block_vector() -> ProbeCase:
+    return ProbeCase(
+        name="SM4 128B Vector",
+        tx=build_frame(SM4_PT8),
+        response_len=len(SM4_CT8),
+        expected=SM4_CT8,
+        description="Eight-block SM4 known vector",
+    )
+
+
+def case_aes_eight_block_vector() -> ProbeCase:
+    return ProbeCase(
+        name="AES 128B Vector",
+        tx=build_frame(b"A" + AES128_PT8),
+        response_len=len(AES128_CT8),
+        expected=AES128_CT8,
+        description="Eight-block AES known vector",
+    )
+
+
 def case_block_ascii(text: str = "XYZ") -> ProbeCase:
     payload = text.encode("ascii")
     return ProbeCase(
@@ -270,8 +298,8 @@ def case_encrypt_block(algo: str, plaintext: bytes) -> ProbeCase:
     normalized = algo.strip().upper()
     if normalized not in {"AES", "SM4"}:
         raise ValueError("algo must be AES or SM4")
-    if len(plaintext) not in {16, 32, 64}:
-        raise ValueError("plaintext length must be 16, 32, or 64 bytes")
+    if len(plaintext) % 16 != 0 or len(plaintext) == 0 or len(plaintext) > 240:
+        raise ValueError("plaintext length must be a non-zero multiple of 16 bytes and <= 240 bytes")
     if normalized == "AES":
         tx = build_frame(b"A" + plaintext)
     else:

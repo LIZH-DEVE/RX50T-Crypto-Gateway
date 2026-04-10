@@ -13,7 +13,7 @@ Design goals:
 
 The current validated mainline is:
 
-`UART -> Parser -> BRAM-backed ACL -> AES/SM4 -> UART + Stats Query + Rule-Stats Query`
+`UART -> Parser -> 8-rule BRAM-backed ACL -> BRAM-backed block-stream AES/SM4 (16B/32B/64B/128B) -> UART + Stats Query + Rule-Stats Query`
 
 `P1` extends that path with:
 - a BRAM-backed ACL rule table
@@ -22,7 +22,7 @@ The current validated mainline is:
 - `8` `8-bit` per-rule ACL hardware counters
 - stats query over UART
 - rule-stats query over UART
-- `16B / 32B / 64B` continuous encryption
+- `16B / 32B / 64B / 128B` BRAM-backed block-stream encryption
 
 This mainline now has:
 - simulation evidence
@@ -120,15 +120,17 @@ Purpose:
 
 Current boundary:
 - fixed internal test keys
-- supports `16B`, `32B`, and `64B` payload paths
+- supports `16B`, `32B`, `64B`, and `128B` payload paths
 - no dynamic key download
 - no hardware padding
 - short control frames like `D\n` and `E\n` bypass encryption
 
 Internal phases:
-- `S_RX_GATHER`: gather the full frame, currently up to `64B`
-- `S_ENCRYPT`: drive the crypto core block by block
-- `S_TX_SCATTER`: emit ciphertext one byte at a time
+- pack incoming bytes into one `128-bit` block at a time
+- push plaintext blocks into a BRAM-backed ingress FIFO
+- drive a single-block `AES/SM4` worker
+- push ciphertext blocks into a BRAM-backed egress FIFO
+- emit ciphertext one byte at a time from the egress FIFO under UART backpressure
 
 ### 3.6 AES/SM4 Cores
 
@@ -188,6 +190,9 @@ Purpose:
 - `LEN = 64`
 - payload is four consecutive `SM4` plaintext blocks
 
+- `LEN = 128`
+- payload is eight consecutive `SM4` plaintext blocks
+
 ### Explicit AES Mode
 
 - `LEN = 17`
@@ -202,6 +207,10 @@ Purpose:
 - first payload byte = `0x41 ('A')`
 - remaining `64B` = four consecutive AES plaintext blocks
 
+- `LEN = 129`
+- first payload byte = `0x41 ('A')`
+- remaining `128B` = eight consecutive AES plaintext blocks
+
 ### Explicit SM4 Mode
 
 - `LEN = 17`
@@ -215,6 +224,10 @@ Purpose:
 - `LEN = 65`
 - first payload byte = `0x53 ('S')`
 - remaining `64B` = four consecutive SM4 plaintext blocks
+
+- `LEN = 129`
+- first payload byte = `0x53 ('S')`
+- remaining `128B` = eight consecutive SM4 plaintext blocks
 
 ### Error and Block Replies
 
@@ -253,6 +266,8 @@ Verified:
 - `SM4 probe`
 - `crypto probe (AES/SM4)`
 - `two-block AES/SM4`
+- `four-block AES/SM4`
+- `eight-block AES/SM4`
 
 ### Real Board
 
@@ -266,6 +281,8 @@ Verified on `COM12`:
 - `32B AES`
 - `64B SM4`
 - `64B AES`
+- `128B SM4`
+- `128B AES`
 - latest BRAM-backed ACL smoke test
 
 Representative real-board results:
@@ -376,13 +393,14 @@ It does not expose runtime ACL table writes.
 ## 6. Current Implementation Numbers
 
 `rx50t_uart_crypto_probe_board_top` implementation results:
-- `WNS = 5.691ns`
-- `WHS = 0.048ns`
+- `WNS = 6.199ns`
+- `WHS = 0.031ns`
 - `DRC violations = 0`
-- `Slice LUTs = 6327`
-- `Slice Registers = 6238`
-- `Slice = 2411`
+- `Slice LUTs = 3432`
+- `Slice Registers = 4702`
+- `Slice = 1580`
 - `Bonded IOB = 4`
+- `RAMB36 = 4`
 - `RAMB18 = 1`
 - `DSPs = 0`
 
@@ -427,7 +445,7 @@ This is why the GUI now schedules a short delayed rule-counter refresh after ACL
 Not part of the current baseline:
 - dynamic key download
 - `CBC`
-- payloads longer than `64B`
+- payloads longer than `128B`
 - `DMA / DDR / PBM`
 - `Host/PS`
 - full `Ethernet/IP/UDP` stack
@@ -442,7 +460,7 @@ The current `RX50T` version is now a real pure-`PL` security datapath with verif
 and it already supports:
 - multi-rule ACL
 - AES/SM4 mode switching
-- `16B / 32B / 64B` continuous encryption
+- `16B / 32B / 64B / 128B` BRAM-backed block-stream encryption
 - protocol error fallback
 - aggregate stats query and counter readback
 - board-side per-rule ACL counter readback

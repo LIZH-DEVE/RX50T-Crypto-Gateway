@@ -1,3 +1,5 @@
+`timescale 1ns/1ps
+
 package crypto_vectors_pkg;
     // AES-128 NIST known answer test vectors.
     localparam logic [127:0] AES128_KEY = 128'h000102030405060708090a0b0c0d0e0f;
