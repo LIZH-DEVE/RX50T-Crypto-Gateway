@@ -101,6 +101,18 @@ class ProbeResult:
         return bits / self.duration_s / 1_000_000.0
 
 
+@dataclass(frozen=True)
+class FileChunkPlan:
+    chunks: tuple[bytes, ...]
+    original_size: int
+    padded_size: int
+    pad_bytes: int
+
+    @property
+    def chunk_count(self) -> int:
+        return len(self.chunks)
+
+
 def build_frame(payload: bytes) -> bytes:
     if not payload:
         raise ValueError("payload must not be empty")
@@ -145,6 +157,50 @@ def read_exact(ser: serial.Serial, expected_len: int, timeout_s: float) -> bytes
         if chunk:
             buf.extend(chunk)
     return bytes(buf)
+
+
+def pkcs7_pad(payload: bytes, block_size: int) -> bytes:
+    if block_size <= 0 or block_size >= 256:
+        raise ValueError("block_size must be between 1 and 255")
+    pad_len = block_size - (len(payload) % block_size)
+    if pad_len == 0:
+        pad_len = block_size
+    return payload + bytes([pad_len]) * pad_len
+
+
+def plan_file_chunks_for_transport(
+    payload: bytes,
+    *,
+    chunk_size: int = 128,
+    block_size: int = 16,
+) -> FileChunkPlan:
+    if not payload:
+        raise ValueError("payload must not be empty")
+    if chunk_size <= 0 or chunk_size >= 256:
+        raise ValueError("chunk_size must be between 1 and 255")
+    if block_size <= 0 or chunk_size % block_size != 0:
+        raise ValueError("chunk_size must be a positive multiple of block_size")
+
+    if len(payload) <= chunk_size and len(payload) % block_size == 0:
+        return FileChunkPlan((payload,), len(payload), len(payload), 0)
+
+    chunks: list[bytes] = []
+    full_aligned_len = (len(payload) // chunk_size) * chunk_size
+    if len(payload) > chunk_size and full_aligned_len:
+        for index in range(0, full_aligned_len, chunk_size):
+            chunks.append(payload[index : index + chunk_size])
+        tail = payload[full_aligned_len:]
+    else:
+        tail = payload
+
+    if tail:
+        pad_len = chunk_size - len(tail)
+        chunks.append(tail + bytes([pad_len]) * pad_len)
+    else:
+        pad_len = 0
+
+    padded_size = len(payload) + pad_len
+    return FileChunkPlan(tuple(chunks), len(payload), padded_size, pad_len)
 
 
 def split_blocks_for_transport(payload: bytes) -> list[bytes]:

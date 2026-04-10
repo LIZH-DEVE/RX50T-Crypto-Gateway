@@ -35,6 +35,7 @@ The current system boundary is:
 
 The GUI MVP has already completed a first real-board walkthrough over the live UART link.
 Its quick-action panel now exposes `AES/SM4` vectors at `16B / 32B / 64B / 128B`.
+Its file-encryption path now accepts oversize files by slicing them into `128B` ping-pong chunks and padding the final short chunk with `PKCS#7`.
 
 ## 2. Board Baseline
 
@@ -377,6 +378,17 @@ Additional real-board verification through the shared GUI worker backend:
 
 Observed result:
 - both `128B` generated ciphertext files matched their expected references exactly
+
+Oversize real-board verification through the same GUI worker backend:
+- a `160B` file was accepted for both `SM4` and `AES`
+- transport behavior:
+  - chunk `1/2`: `128B`
+  - chunk `2/2`: `128B`
+- tail padding:
+  - `96` bytes of `PKCS#7`
+- final ciphertext size:
+  - `256B`
+- cumulative throughput stayed live during the ping-pong loop
 
 ### GUI ACL Rule-Table Display
 

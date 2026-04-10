@@ -223,7 +223,7 @@ class CryptoGatewayApp(tk.Tk):
         ttk.Combobox(file_frame, textvariable=self.file_algo, values=["SM4", "AES"], state="readonly", width=8).grid(row=0, column=1, sticky="w")
         ttk.Label(
             file_frame,
-            text="Only files whose byte length is a multiple of 16 are accepted.\nThe GUI chunks them into 240B/128B/64B/32B/16B transactions automatically.",
+            text="Any non-empty file is accepted.\nFiles larger than 128B are sliced into 128B ping-pong chunks.\nThe final short chunk is padded to 128B with PKCS#7 automatically.",
             justify="left",
             wraplength=280,
         ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(12, 12))
@@ -423,29 +423,43 @@ class CryptoGatewayApp(tk.Tk):
             if expected is not None and not passed:
                 self._append_log(f"Expected {format_hex(expected)}", "error")
         elif kind == "file_progress":
-            self._update_throughput(float(payload["throughput_mbps"]), 0.001)
+            elapsed_s = max(float(payload.get("elapsed_s", 0.001)), 1e-9)
+            self._update_throughput(float(payload["throughput_mbps"]), elapsed_s)
+            processed = int(payload["processed"])
+            total = int(payload["total"])
+            original_total = int(payload.get("original_total", total))
+            pad_bytes = int(payload.get("pad_bytes", 0))
             self._append_log(
-                f"FILE {payload['algo']}: {payload['processed']}/{payload['total']} bytes "
-                f"(chunk {payload['chunk']})",
+                f"FILE {payload['algo']}: chunk {payload.get('chunk_index', '?')}/{payload.get('chunk_count', '?')} "
+                f"{processed}/{total} bytes over UART (orig {original_total}, pad {pad_bytes}, chunk {payload['chunk']})",
                 "info",
             )
             self._set_banner(
-                f"Encrypting file via {payload['algo']}: {payload['processed']}/{payload['total']} bytes",
+                f"Encrypting via {payload['algo']}: {processed}/{total} transport bytes "
+                f"(orig {original_total}, pad {pad_bytes}) @ {float(payload['throughput_mbps']):.3f} Mbps",
                 "info",
             )
         elif kind == "file_done":
             self._append_log(
-                f"FILE DONE {payload['algo']}: {payload['total_bytes']} bytes -> {payload['output_path']} "
+                f"FILE DONE {payload['algo']}: {payload['total_bytes']} transport bytes "
+                f"(orig {payload.get('original_bytes', payload['total_bytes'])}, pad {payload.get('pad_bytes', 0)}, chunks {payload.get('chunk_count', '?')}) "
+                f"-> {payload['output_path']} "
                 f"@ {payload['throughput_mbps']:.3f} Mbps",
                 "pass",
             )
             self._set_banner(
-                f"File encryption finished: {Path(payload['output_path']).name}",
+                f"File encryption finished: {Path(payload['output_path']).name} "
+                f"(pad {payload.get('pad_bytes', 0)}, chunks {payload.get('chunk_count', '?')})",
                 "pass",
             )
             messagebox.showinfo(
                 "File Encryption Complete",
-                f"Output written to:\n{payload['output_path']}",
+                "Output written to:\n"
+                f"{payload['output_path']}\n\n"
+                f"Original bytes: {payload.get('original_bytes', payload['total_bytes'])}\n"
+                f"Transport bytes: {payload['total_bytes']}\n"
+                f"PKCS#7 pad bytes: {payload.get('pad_bytes', 0)}\n"
+                f"Chunks: {payload.get('chunk_count', '?')}",
             )
 
     def _poll_worker(self) -> None:

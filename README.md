@@ -22,6 +22,7 @@ The current system direction is:
 - PC-side GUI as the instrument panel for demo, monitoring, and batch testing
 - the GUI exposes the compiled ACL rule table carried by the current bitstream
 - the GUI can query board-side per-rule ACL counters and highlight the current hot rule
+- the GUI file-encryption path now slices oversize files into `128B` ping-pong chunks and pads the final short chunk with `PKCS#7`
 
 The GUI MVP has already completed its first real-board walkthrough against the live `RX50T` board.
 Its quick-action panel now exposes `AES/SM4` vectors at `16B / 32B / 64B / 128B`.
@@ -247,6 +248,15 @@ GUI shared worker file-encryption path verified on the real board for `128B` sam
     - `contest_project/demo_assets/expected_aes_128b.bin`
 - result:
   - both `128B` generated files matched their expected ciphertext references exactly
+
+Oversize GUI worker path verified on the real board:
+- `160B` plaintext files were accepted without error
+- both `SM4` and `AES` were sliced into:
+  - chunk `1/2`: `128B`
+  - chunk `2/2`: `128B`
+- the short tail was padded with `96` bytes of `PKCS#7`
+- final ciphertext output length became `256B`
+- throughput remained live during the ping-pong loop
 
 ## Relation to the Original Project
 

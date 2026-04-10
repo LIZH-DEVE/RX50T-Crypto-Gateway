@@ -2,6 +2,7 @@ import unittest
 
 from crypto_gateway_protocol import (
     AclRuleCounters,
+    FileChunkPlan,
     StatsCounters,
     build_frame,
     case_aes_eight_block_vector,
@@ -13,8 +14,10 @@ from crypto_gateway_protocol import (
     case_sm4_eight_block_vector,
     case_sm4_four_block_vector,
     extract_first_payload_key,
+    pkcs7_pad,
     parse_rule_stats_response,
     parse_stats_response,
+    plan_file_chunks_for_transport,
     split_blocks_for_transport,
 )
 
@@ -85,6 +88,38 @@ class CryptoGatewayProtocolTests(unittest.TestCase):
         chunks = split_blocks_for_transport(payload)
         self.assertEqual([len(chunk) for chunk in chunks], [128])
         self.assertEqual(b"".join(chunks), payload)
+
+    def test_pkcs7_pad_appends_expected_padding(self) -> None:
+        padded = pkcs7_pad(b"ABC", 16)
+        self.assertEqual(len(padded), 16)
+        self.assertEqual(padded[-1], 13)
+        self.assertEqual(padded[-13:], bytes([13]) * 13)
+
+    def test_file_chunk_plan_keeps_single_aligned_128b_chunk(self) -> None:
+        payload = bytes(range(128))
+        plan = plan_file_chunks_for_transport(payload)
+        self.assertEqual(plan, FileChunkPlan((payload,), 128, 128, 0))
+
+    def test_file_chunk_plan_pads_oversize_tail_to_128b(self) -> None:
+        payload = bytes(range(160))
+        plan = plan_file_chunks_for_transport(payload)
+        self.assertEqual(plan.original_size, 160)
+        self.assertEqual(plan.padded_size, 256)
+        self.assertEqual(plan.pad_bytes, 96)
+        self.assertEqual([len(chunk) for chunk in plan.chunks], [128, 128])
+        self.assertEqual(plan.chunks[0], payload[:128])
+        self.assertEqual(plan.chunks[1][:32], payload[128:])
+        self.assertEqual(plan.chunks[1][32:], bytes([96]) * 96)
+
+    def test_file_chunk_plan_pads_small_unaligned_file_to_128b(self) -> None:
+        payload = b"hello world"
+        plan = plan_file_chunks_for_transport(payload)
+        self.assertEqual(plan.original_size, len(payload))
+        self.assertEqual(plan.padded_size, 128)
+        self.assertEqual(plan.pad_bytes, 117)
+        self.assertEqual([len(chunk) for chunk in plan.chunks], [128])
+        self.assertEqual(plan.chunks[0][: len(payload)], payload)
+        self.assertEqual(plan.chunks[0][-1], 117)
 
     def test_extract_first_payload_key_for_acl_probe(self) -> None:
         case = case_block_ascii("XYZ")

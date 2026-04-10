@@ -14,7 +14,11 @@ except ImportError as exc:  # pragma: no cover
         "pyserial is required. Install it with: py -3 -m pip install pyserial"
     ) from exc
 
-from crypto_gateway_protocol import case_encrypt_block, run_case_on_serial, split_blocks_for_transport
+from crypto_gateway_protocol import (
+    case_encrypt_block,
+    plan_file_chunks_for_transport,
+    run_case_on_serial,
+)
 
 
 @dataclass(frozen=True)
@@ -146,28 +150,34 @@ class GatewayWorker:
         raw = path.read_bytes()
         if not raw:
             raise RuntimeError("Selected file is empty")
-        chunks = split_blocks_for_transport(raw)
+        plan = plan_file_chunks_for_transport(raw)
 
         ciphertext = bytearray()
         started = time.perf_counter()
-        processed = 0
-        for chunk in chunks:
+        processed_transport = 0
+        for index, chunk in enumerate(plan.chunks, start=1):
             case = case_encrypt_block(algo, chunk)
             result = run_case_on_serial(ser, case, timeout_s)
             if len(result.rx) != len(chunk):
                 raise RuntimeError(
-                    f"Unexpected ciphertext length for chunk {processed // 16}: {len(result.rx)}"
+                    f"Unexpected ciphertext length for chunk {index}: {len(result.rx)}"
                 )
             ciphertext.extend(result.rx)
-            processed += len(chunk)
+            processed_transport += len(chunk)
+            elapsed = max(time.perf_counter() - started, 1e-9)
             self._emit(
                 "file_progress",
                 path=str(path),
                 algo=algo.upper(),
-                processed=processed,
-                total=len(raw),
+                processed=processed_transport,
+                total=plan.padded_size,
+                original_total=plan.original_size,
+                pad_bytes=plan.pad_bytes,
+                chunk_index=index,
+                chunk_count=plan.chunk_count,
                 chunk=len(chunk),
-                throughput_mbps=result.throughput_mbps,
+                throughput_mbps=(processed_transport * 8) / elapsed / 1_000_000.0,
+                elapsed_s=elapsed,
             )
 
         elapsed = max(time.perf_counter() - started, 1e-9)
@@ -179,7 +189,10 @@ class GatewayWorker:
             path=str(path),
             output_path=str(output_path),
             algo=algo.upper(),
-            total_bytes=len(raw),
+            total_bytes=plan.padded_size,
+            original_bytes=plan.original_size,
+            pad_bytes=plan.pad_bytes,
+            chunk_count=plan.chunk_count,
             duration_s=elapsed,
-            throughput_mbps=(len(raw) * 8) / elapsed / 1_000_000.0,
+            throughput_mbps=(plan.padded_size * 8) / elapsed / 1_000_000.0,
         )
