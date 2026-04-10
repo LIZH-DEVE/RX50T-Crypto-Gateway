@@ -80,6 +80,12 @@ class CryptoGatewayProtocolTests(unittest.TestCase):
         self.assertEqual(case.tx[:2], bytes([0x55, 0x80]))
         self.assertEqual(case.response_len, 128)
 
+    def test_split_blocks_uses_single_128b_chunk(self) -> None:
+        payload = bytes(range(128))
+        chunks = split_blocks_for_transport(payload)
+        self.assertEqual([len(chunk) for chunk in chunks], [128])
+        self.assertEqual(b"".join(chunks), payload)
+
     def test_extract_first_payload_key_for_acl_probe(self) -> None:
         case = case_block_ascii("XYZ")
         self.assertEqual(extract_first_payload_key(case.tx), "X")

@@ -24,6 +24,7 @@ The current system direction is:
 - the GUI can query board-side per-rule ACL counters and highlight the current hot rule
 
 The GUI MVP has already completed its first real-board walkthrough against the live `RX50T` board.
+Its quick-action panel now exposes `AES/SM4` vectors at `16B / 32B / 64B / 128B`.
 
 ## Current Status
 
@@ -228,6 +229,24 @@ GUI file-encryption walkthrough verified:
     - `contest_project/demo_assets/expected_aes_32b.bin`
 - result:
   - both generated files matched their expected ciphertext references exactly
+
+GUI shared worker file-encryption path verified on the real board for `128B` samples:
+- `SM4`
+  - input sample:
+    - `contest_project/demo_assets/demo_sm4_128b.bin`
+  - generated output:
+    - `contest_project/demo_assets/demo_sm4_128b.bin.sm4.bin`
+  - expected reference:
+    - `contest_project/demo_assets/expected_sm4_128b.bin`
+- `AES`
+  - input sample:
+    - `contest_project/demo_assets/demo_aes_128b.bin`
+  - generated output:
+    - `contest_project/demo_assets/demo_aes_128b.bin.aes.bin`
+  - expected reference:
+    - `contest_project/demo_assets/expected_aes_128b.bin`
+- result:
+  - both `128B` generated files matched their expected ciphertext references exactly
 
 ## Relation to the Original Project
 

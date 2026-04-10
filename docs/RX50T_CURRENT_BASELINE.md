@@ -34,6 +34,7 @@ The current system boundary is:
 - PC-side Python tools for testing, observability, and GUI demo
 
 The GUI MVP has already completed a first real-board walkthrough over the live UART link.
+Its quick-action panel now exposes `AES/SM4` vectors at `16B / 32B / 64B / 128B`.
 
 ## 2. Board Baseline
 
@@ -357,6 +358,25 @@ Observed result:
 - the GUI completed both file-encryption runs
 - both output files remained `32B`
 - both generated ciphertext files matched their expected references exactly
+
+Additional real-board verification through the shared GUI worker backend:
+- `SM4`
+  - input file:
+    - `contest_project/demo_assets/demo_sm4_128b.bin`
+  - output file:
+    - `contest_project/demo_assets/demo_sm4_128b.bin.sm4.bin`
+  - expected reference:
+    - `contest_project/demo_assets/expected_sm4_128b.bin`
+- `AES`
+  - input file:
+    - `contest_project/demo_assets/demo_aes_128b.bin`
+  - output file:
+    - `contest_project/demo_assets/demo_aes_128b.bin.aes.bin`
+  - expected reference:
+    - `contest_project/demo_assets/expected_aes_128b.bin`
+
+Observed result:
+- both `128B` generated ciphertext files matched their expected references exactly
 
 ### GUI ACL Rule-Table Display
 
