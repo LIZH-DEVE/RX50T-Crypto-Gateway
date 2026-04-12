@@ -23,7 +23,8 @@ module tb_contest_parser_core;
 
     contest_parser_core #(
         .SOF_BYTE         (8'h55),
-        .MAX_PAYLOAD_BYTES(8)
+        .MAX_PAYLOAD_BYTES(8),
+        .INTERBYTE_TIMEOUT_CLKS(6)
     ) dut (
         .i_clk          (clk),
         .i_rst_n        (rst_n),
@@ -102,6 +103,14 @@ module tb_contest_parser_core;
         end
     endtask
 
+    task automatic send_truncated_frame;
+        begin
+            drive_byte(8'h55);
+            drive_byte(8'd3);
+            drive_byte(8'h41);
+        end
+    endtask
+
     initial begin
         rst_n    = 1'b0;
         in_valid = 1'b0;
@@ -144,20 +153,31 @@ module tb_contest_parser_core;
             $fatal(1, "Expected second error after oversize frame, got %0d", error_count);
         end
 
+        send_truncated_frame();
+        repeat (8) @(posedge clk);
+
+        if (error_count != 3) begin
+            $fatal(1, "Expected third error after inter-byte timeout, got %0d", error_count);
+        end
+        if (in_frame !== 1'b0) begin
+            $fatal(1, "Parser should have recovered to IDLE after timeout");
+        end
+
         send_valid_frame();
         repeat (4) @(posedge clk);
 
-        if (start_count != 4) begin
-            $fatal(1, "Expected four frame_start pulses total, got %0d", start_count);
+        if (start_count != 5) begin
+            $fatal(1, "Expected five frame_start pulses total, got %0d", start_count);
         end
         if (done_count != 2) begin
             $fatal(1, "Expected two completed valid frames, got %0d", done_count);
         end
-        if (capture_idx != 6) begin
-            $fatal(1, "Expected 6 total payload bytes after second valid frame, got %0d", capture_idx);
+        if (capture_idx != 7) begin
+            $fatal(1, "Expected 7 total payload bytes after timeout recovery, got %0d", capture_idx);
         end
-        if ((capture_mem[3] != 8'h41) || (capture_mem[4] != 8'h42) || (capture_mem[5] != 8'h43)) begin
-            $fatal(1, "Second payload capture mismatch: %02x %02x %02x", capture_mem[3], capture_mem[4], capture_mem[5]);
+        if ((capture_mem[3] != 8'h41) || (capture_mem[4] != 8'h41) || (capture_mem[5] != 8'h42) || (capture_mem[6] != 8'h43)) begin
+            $fatal(1, "Payload capture around timeout recovery mismatch: %02x %02x %02x %02x",
+                   capture_mem[3], capture_mem[4], capture_mem[5], capture_mem[6]);
         end
 
         $display("contest_parser_core test passed.");

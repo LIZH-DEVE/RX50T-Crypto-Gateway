@@ -27,7 +27,18 @@ AES128_PT8 = AES128_PT4 + AES128_PT4
 AES128_CT8 = AES128_CT4 + AES128_CT4
 SM4_PT8 = SM4_PT4 + SM4_PT4
 SM4_CT8 = SM4_CT4 + SM4_CT4
-DEFAULT_ACL_RULES = ("X", "Y", "Z", "W", "P", "R", "T", "U")
+DEFAULT_ACL_RULE_BYTES = (0x58, 0x59, 0x5A, 0x57, 0x50, 0x52, 0x54, 0x55)
+
+
+def display_rule_byte(value: int) -> str:
+    if not 0 <= value <= 0xFF:
+        raise ValueError("rule byte must be in 0..255")
+    if 32 <= value <= 126:
+        return chr(value)
+    return f"0x{value:02X}"
+
+
+DEFAULT_ACL_RULES = tuple(display_rule_byte(value) for value in DEFAULT_ACL_RULE_BYTES)
 
 
 @dataclass(frozen=True)
@@ -43,25 +54,48 @@ class StatsCounters:
 
 
 @dataclass(frozen=True)
-class AclRuleCounters:
-    x: int
-    y: int
-    z: int
-    w: int
-    p: int
-    r: int
-    t: int
-    u: int
+class AclWriteAck:
+    index: int
+    key: int
 
     def as_bytes(self) -> bytes:
-        return bytes([0x48, self.x, self.y, self.z, self.w, self.p, self.r, self.t, self.u, 0x0A])
+        return bytes([0x43, self.index, self.key, 0x0A])
 
-    def as_dict(self) -> dict[str, int]:
-        return dict(zip(DEFAULT_ACL_RULES, (self.x, self.y, self.z, self.w, self.p, self.r, self.t, self.u)))
 
-    def hot_rule(self) -> tuple[str | None, int]:
-        counts = self.as_dict()
-        rule = max(DEFAULT_ACL_RULES, key=lambda item: counts[item])
+@dataclass(frozen=True)
+class AclKeyMap:
+    keys: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        if len(self.keys) != 8:
+            raise ValueError("ACL key map must contain exactly 8 entries")
+
+    def as_bytes(self) -> bytes:
+        return bytes([0x4B, *self.keys, 0x0A])
+
+    def display_labels(self) -> tuple[str, ...]:
+        return tuple(display_rule_byte(value) for value in self.keys)
+
+
+@dataclass(frozen=True)
+class AclRuleCounters:
+    counts: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        if len(self.counts) != 8:
+            raise ValueError("ACL rule counters must contain exactly 8 entries")
+
+    def as_bytes(self) -> bytes:
+        return bytes([0x48, *self.counts, 0x0A])
+
+    def as_dict(self, labels: tuple[str, ...] | None = None) -> dict[str, int]:
+        active_labels = labels or DEFAULT_ACL_RULES
+        return dict(zip(active_labels, self.counts))
+
+    def hot_rule(self, labels: tuple[str, ...] | None = None) -> tuple[str | None, int]:
+        counts = self.as_dict(labels)
+        ordered = labels or DEFAULT_ACL_RULES
+        rule = max(ordered, key=lambda item: counts[item])
         hits = counts[rule]
         return (rule if hits > 0 else None, hits)
 
@@ -84,6 +118,8 @@ class ProbeResult:
     duration_s: float
     stats: StatsCounters | None = None
     rule_stats: AclRuleCounters | None = None
+    acl_write_ack: AclWriteAck | None = None
+    acl_key_map: AclKeyMap | None = None
 
     @property
     def tx(self) -> bytes:
@@ -137,6 +173,22 @@ def extract_first_payload_key(frame: bytes) -> str | None:
     return f"0x{first:02X}"
 
 
+def parse_rule_byte_input(text: str) -> int:
+    candidate = text.strip()
+    if not candidate:
+        raise ValueError("rule byte input must not be empty")
+    if candidate.lower().startswith("0x"):
+        if len(candidate) != 4:
+            raise ValueError("hex rule byte must be in the form 0xNN")
+        return int(candidate, 16)
+    if len(candidate) != 1:
+        raise ValueError("ASCII rule byte input must be exactly one character")
+    value = ord(candidate)
+    if not 0 <= value <= 0xFF:
+        raise ValueError("rule byte must fit in one byte")
+    return value
+
+
 def parse_stats_response(raw: bytes) -> StatsCounters:
     if len(raw) != 7 or raw[:1] != b"S" or raw[-1:] != b"\n":
         raise ValueError(f"invalid stats response: {format_hex(raw)}")
@@ -146,7 +198,19 @@ def parse_stats_response(raw: bytes) -> StatsCounters:
 def parse_rule_stats_response(raw: bytes) -> AclRuleCounters:
     if len(raw) != 10 or raw[:1] != b"H" or raw[-1:] != b"\n":
         raise ValueError(f"invalid rule stats response: {format_hex(raw)}")
-    return AclRuleCounters(raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7], raw[8])
+    return AclRuleCounters(tuple(raw[1:9]))
+
+
+def parse_acl_write_ack(raw: bytes) -> AclWriteAck:
+    if len(raw) != 4 or raw[:1] != b"C" or raw[-1:] != b"\n":
+        raise ValueError(f"invalid ACL write ACK: {format_hex(raw)}")
+    return AclWriteAck(index=raw[1], key=raw[2])
+
+
+def parse_acl_key_map_response(raw: bytes) -> AclKeyMap:
+    if len(raw) != 10 or raw[:1] != b"K" or raw[-1:] != b"\n":
+        raise ValueError(f"invalid ACL key-map response: {format_hex(raw)}")
+    return AclKeyMap(tuple(raw[1:9]))
 
 
 def read_exact(ser: serial.Serial, expected_len: int, timeout_s: float) -> bytes:
@@ -350,6 +414,32 @@ def case_query_rule_stats(expected: AclRuleCounters | None = None) -> ProbeCase:
     )
 
 
+def case_query_acl_keys(expected: AclKeyMap | None = None) -> ProbeCase:
+    return ProbeCase(
+        name="Query ACL Key Map",
+        tx=build_frame(b"K"),
+        response_len=10,
+        expected=expected.as_bytes() if expected else None,
+        description="ACL slot-key readback",
+        kind="acl_key_map",
+    )
+
+
+def case_acl_write(index: int, key: int, expected: AclWriteAck | None = None) -> ProbeCase:
+    if not 0 <= index <= 7:
+        raise ValueError("ACL rule index must be in 0..7")
+    if not 0 <= key <= 0xFF:
+        raise ValueError("ACL rule key must be in 0..255")
+    return ProbeCase(
+        name=f"ACL Write slot {index}",
+        tx=build_frame(bytes([0x03, index, key])),
+        response_len=4,
+        expected=expected.as_bytes() if expected else None,
+        description=f"Rewrite ACL slot {index} to {display_rule_byte(key)}",
+        kind="acl_write",
+    )
+
+
 def case_encrypt_block(algo: str, plaintext: bytes) -> ProbeCase:
     normalized = algo.strip().upper()
     if normalized not in {"AES", "SM4"}:
@@ -384,6 +474,8 @@ def run_case_on_serial(
 
     stats = None
     rule_stats = None
+    acl_write_ack = None
+    acl_key_map = None
     passed = False
     if case.kind == "stats":
         try:
@@ -397,6 +489,18 @@ def run_case_on_serial(
             passed = case.expected is None or rx == case.expected
         except ValueError:
             passed = False
+    elif case.kind == "acl_write":
+        try:
+            acl_write_ack = parse_acl_write_ack(rx)
+            passed = case.expected is None or rx == case.expected
+        except ValueError:
+            passed = False
+    elif case.kind == "acl_key_map":
+        try:
+            acl_key_map = parse_acl_key_map_response(rx)
+            passed = case.expected is None or rx == case.expected
+        except ValueError:
+            passed = False
     else:
         passed = case.expected is None or rx == case.expected
 
@@ -407,4 +511,6 @@ def run_case_on_serial(
         duration_s=duration_s,
         stats=stats,
         rule_stats=rule_stats,
+        acl_write_ack=acl_write_ack,
+        acl_key_map=acl_key_map,
     )

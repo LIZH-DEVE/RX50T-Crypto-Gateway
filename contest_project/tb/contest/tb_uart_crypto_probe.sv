@@ -120,7 +120,7 @@ module tb_uart_crypto_probe;
             end
             if (sample !== expected) begin
                 $fatal(1,
-                       "UART output mismatch. expected=0x%02x actual=0x%02x active_algo=%0b frame_algo=%0b crypto_block=%032h tx_shift=%032h tx_count=%0d acl_in_valid=%0b acl_in_data=0x%02x acl_valid=%0b acl_data=0x%02x parser_len=%0d selector_seen=%0b proto_err=%0b",
+                       "UART output mismatch. expected=0x%02x actual=0x%02x active_algo=%0b frame_algo=%0b crypto_block=%032h tx_shift=%032h tx_count=%0d acl_in_valid=%0b acl_in_data=0x%02x acl_valid=%0b acl_data=0x%02x parser_len=%0d proto_err=%0b",
                        expected,
                        sample,
                        dut.u_probe.u_bridge.active_algo_q,
@@ -133,7 +133,6 @@ module tb_uart_crypto_probe;
                        dut.u_probe.acl_valid,
                        dut.u_probe.acl_data,
                        dut.u_probe.parser_payload_len,
-                       dut.u_probe.frame_selector_seen_q,
                        dut.u_probe.frame_proto_error_q);
             end
         end
@@ -371,9 +370,78 @@ module tb_uart_crypto_probe;
         #(20 * BIT_PERIODNS);
 
         stage_q = 12;
-        // Add one extra BRAM-backed rule dynamically and verify the top-level
-        // stats follow the ACL output instead of a hardcoded key list.
-        dut.u_probe.u_acl.rule_table_q[8'h51] = 8'h01; // Q -> block
+        // Query the live ACL key map.
+        fork
+            begin
+                uart_send_byte(8'h55);
+                uart_send_byte(8'd1);
+                uart_send_byte(8'h4B);
+            end
+            begin
+                uart_expect_byte(8'h4B);
+                uart_expect_byte(8'h58);
+                uart_expect_byte(8'h59);
+                uart_expect_byte(8'h5A);
+                uart_expect_byte(8'h57);
+                uart_expect_byte(8'h50);
+                uart_expect_byte(8'h52);
+                uart_expect_byte(8'h54);
+                uart_expect_byte(8'h55);
+                uart_expect_byte(8'h0A);
+            end
+        join
+        $display("tb_uart_crypto_probe: initial ACL key-map query passed");
+
+        #(20 * BIT_PERIODNS);
+
+        stage_q = 13;
+        // Rewrite slot 3 from W to Q and expect control-plane ACK.
+        fork
+            begin
+                uart_send_byte(8'h55);
+                uart_send_byte(8'd3);
+                uart_send_byte(8'h03);
+                uart_send_byte(8'h03);
+                uart_send_byte(8'h51);
+            end
+            begin
+                uart_expect_byte(8'h43);
+                uart_expect_byte(8'h03);
+                uart_expect_byte(8'h51);
+                uart_expect_byte(8'h0A);
+            end
+        join
+        $display("tb_uart_crypto_probe: ACL rewrite ACK passed");
+
+        #(20 * BIT_PERIODNS);
+
+        stage_q = 14;
+        // Query the live ACL key map again and confirm slot 3 changed to Q.
+        fork
+            begin
+                uart_send_byte(8'h55);
+                uart_send_byte(8'd1);
+                uart_send_byte(8'h4B);
+            end
+            begin
+                uart_expect_byte(8'h4B);
+                uart_expect_byte(8'h58);
+                uart_expect_byte(8'h59);
+                uart_expect_byte(8'h5A);
+                uart_expect_byte(8'h51);
+                uart_expect_byte(8'h50);
+                uart_expect_byte(8'h52);
+                uart_expect_byte(8'h54);
+                uart_expect_byte(8'h55);
+                uart_expect_byte(8'h0A);
+            end
+        join
+        $display("tb_uart_crypto_probe: rewritten ACL key-map query passed");
+
+        #(20 * BIT_PERIODNS);
+
+        stage_q = 15;
+        // New runtime rule Q should block immediately.
         fork
             begin
                 uart_send_byte(8'h55);
@@ -387,12 +455,31 @@ module tb_uart_crypto_probe;
                 uart_expect_byte(8'h0A);
             end
         join
-        $display("tb_uart_crypto_probe: dynamic rule Q counter query passed");
+        $display("tb_uart_crypto_probe: dynamic rule Q block passed");
 
         #(20 * BIT_PERIODNS);
 
-        stage_q = 13;
-        // Query counters -> S total acl aes sm4 err \n
+        stage_q = 16;
+        // Duplicate key rewrite should reject with E\n.
+        fork
+            begin
+                uart_send_byte(8'h55);
+                uart_send_byte(8'd3);
+                uart_send_byte(8'h03);
+                uart_send_byte(8'h00);
+                uart_send_byte(8'h59);
+            end
+            begin
+                uart_expect_byte(8'h45);
+                uart_expect_byte(8'h0A);
+            end
+        join
+        $display("tb_uart_crypto_probe: duplicate ACL rewrite reject passed");
+
+        #(20 * BIT_PERIODNS);
+
+        stage_q = 17;
+        // Query per-slot counters -> H c0..c7 \n
         fork
             begin
                 uart_send_byte(8'h55);
@@ -404,7 +491,7 @@ module tb_uart_crypto_probe;
                 uart_expect_byte(8'h01);
                 uart_expect_byte(8'h00);
                 uart_expect_byte(8'h00);
-                uart_expect_byte(8'h00);
+                uart_expect_byte(8'h01);
                 uart_expect_byte(8'h01);
                 uart_expect_byte(8'h00);
                 uart_expect_byte(8'h00);
@@ -412,11 +499,11 @@ module tb_uart_crypto_probe;
                 uart_expect_byte(8'h0A);
             end
         join
-        $display("tb_uart_crypto_probe: aggregate stats query passed");
+        $display("tb_uart_crypto_probe: rule stats query passed");
 
         #(20 * BIT_PERIODNS);
 
-        stage_q = 14;
+        stage_q = 18;
         // Query aggregate counters -> S total acl aes sm4 err \n
         fork
             begin
@@ -430,7 +517,7 @@ module tb_uart_crypto_probe;
                 uart_expect_byte(8'h03);
                 uart_expect_byte(8'h04);
                 uart_expect_byte(8'h04);
-                uart_expect_byte(8'h01);
+                uart_expect_byte(8'h02);
                 uart_expect_byte(8'h0A);
             end
         join

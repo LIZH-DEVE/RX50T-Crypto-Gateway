@@ -31,7 +31,7 @@ from crypto_gateway_protocol import (
 def main() -> int:
     parser = argparse.ArgumentParser(description="Send an AES/SM4 crypto probe frame to RX50T over UART.")
     parser.add_argument("--port", required=True, help="Serial port, e.g. COM12")
-    parser.add_argument("--baud", type=int, default=115200, help="Baud rate")
+    parser.add_argument("--baud", type=int, default=2_000_000, help="Baud rate")
     parser.add_argument(
         "--sm4-known-vector",
         action="store_true",
