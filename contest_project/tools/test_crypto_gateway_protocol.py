@@ -5,6 +5,8 @@ from crypto_gateway_protocol import (
     AclRuleCounters,
     AclWriteAck,
     FileChunkPlan,
+    PmuClearAck,
+    PmuSnapshot,
     StatsCounters,
     StreamBlockResponse,
     StreamCapabilities,
@@ -12,9 +14,11 @@ from crypto_gateway_protocol import (
     StreamErrorResponse,
     StreamStartAck,
     build_frame,
+    case_clear_pmu,
     build_stream_capability_query,
     build_stream_chunk_frame,
     build_stream_start_frame,
+    case_query_pmu,
     case_acl_write,
     case_aes_eight_block_vector,
     case_aes_four_block_vector,
@@ -29,6 +33,8 @@ from crypto_gateway_protocol import (
     pkcs7_pad,
     parse_acl_key_map_response,
     parse_acl_write_ack,
+    parse_pmu_clear_ack,
+    parse_pmu_snapshot_response,
     parse_rule_byte_input,
     parse_rule_stats_response,
     parse_stats_response,
@@ -79,6 +85,16 @@ class CryptoGatewayProtocolTests(unittest.TestCase):
         self.assertEqual(case.tx, bytes([0x55, 0x01, 0x4B]))
         self.assertEqual(case.response_len, 10)
 
+    def test_case_query_pmu_builds_query_frame(self) -> None:
+        case = case_query_pmu()
+        self.assertEqual(case.tx, bytes([0x55, 0x01, 0x50]))
+        self.assertEqual(case.response_len, 48)
+
+    def test_case_clear_pmu_builds_clear_frame(self) -> None:
+        case = case_clear_pmu()
+        self.assertEqual(case.tx, bytes([0x55, 0x01, 0x4A]))
+        self.assertEqual(case.response_len, 4)
+
     def test_build_stream_capability_query(self) -> None:
         self.assertEqual(build_stream_capability_query(), bytes([0x55, 0x01, 0x57]))
 
@@ -104,6 +120,38 @@ class CryptoGatewayProtocolTests(unittest.TestCase):
         )
         self.assertEqual(key_map, AclKeyMap((0x58, 0x59, 0x5A, 0x51, 0x50, 0x52, 0x54, 0x55)))
         self.assertEqual(key_map.display_labels(), ("X", "Y", "Z", "Q", "P", "R", "T", "U"))
+
+    def test_parse_pmu_snapshot_response(self) -> None:
+        snapshot = parse_pmu_snapshot_response(
+            bytes.fromhex(
+                "55 2E 50 01"
+                " 00 2F AF 08"
+                " 00 00 00 00 00 00 01 00"
+                " 00 00 00 00 00 00 00 40"
+                " 00 00 00 00 00 00 00 20"
+                " 00 00 00 00 00 00 00 10"
+                " 00 00 00 00 00 00 00 03"
+            )
+        )
+        self.assertEqual(
+            snapshot,
+            PmuSnapshot(
+                clk_hz=3_125_000,
+                global_cycles=256,
+                crypto_active_cycles=64,
+                uart_tx_stall_cycles=32,
+                stream_credit_block_cycles=16,
+                acl_block_events=3,
+            ),
+        )
+        self.assertAlmostEqual(snapshot.crypto_utilization, 0.25)
+        self.assertAlmostEqual(snapshot.uart_stall_ratio, 0.125)
+        self.assertAlmostEqual(snapshot.credit_block_ratio, 0.0625)
+        self.assertAlmostEqual(snapshot.elapsed_ms_from_hw, 256 / 3_125_000 * 1000.0)
+
+    def test_parse_pmu_clear_ack(self) -> None:
+        ack = parse_pmu_clear_ack(bytes([0x55, 0x02, 0x4A, 0x00]))
+        self.assertEqual(ack, PmuClearAck(status=0))
 
     def test_parse_stream_capability_response(self) -> None:
         message = parse_stream_response(bytes([0x55, 0x04, 0x57, 0x80, 0x08, 0x07]))

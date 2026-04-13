@@ -93,6 +93,7 @@ module contest_uart_sm4_probe #(
         .acl_last     (bridge_in_last_q),
         .i_algo_sel   (1'b0),
         .uart_tx_ready(tx_ready),
+        .o_pmu_crypto_active(),
         .bridge_valid (bridge_valid),
         .bridge_data  (bridge_data),
         .bridge_last  (bridge_last)

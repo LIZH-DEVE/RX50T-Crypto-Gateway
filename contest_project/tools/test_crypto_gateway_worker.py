@@ -3,6 +3,14 @@ from unittest import mock
 import threading
 
 import crypto_gateway_worker as worker_mod
+from crypto_gateway_protocol import (
+    PmuClearAck,
+    PmuSnapshot,
+    ProbeCase,
+    ProbeResult,
+    case_clear_pmu,
+    case_query_pmu,
+)
 
 
 class FakeStreamSerial:
@@ -112,7 +120,153 @@ class GatewayWorkerTests(unittest.TestCase):
         self.assertEqual(len(results), 1)
         fake_serial.flush.assert_called_once_with()
 
-    def test_handle_encrypt_file_uses_stream_helper_and_emits_extended_metrics(self) -> None:
+    def test_handle_encrypt_file_uses_stream_v3_helper_and_emits_extended_metrics(self) -> None:
+        worker = worker_mod.GatewayWorker()
+        fake_serial = mock.Mock()
+        worker._serial = fake_serial
+        worker._connected_port = "COM12"
+        worker._connected_baud = 2_000_000
+
+        mock_input_path = mock.Mock()
+        mock_input_path.read_bytes.return_value = b"A" * 32
+        mock_input_path.name = "payload.bin"
+        mock_input_path.__str__ = mock.Mock(return_value="payload.bin")
+        mock_output_path = mock.Mock()
+        mock_output_path.__str__ = mock.Mock(return_value="payload.bin.sm4.bin")
+        mock_input_path.with_name.return_value = mock_output_path
+        pmu_snapshot = PmuSnapshot(
+            clk_hz=50_000_000,
+            global_cycles=2048,
+            crypto_active_cycles=512,
+            uart_tx_stall_cycles=256,
+            stream_credit_block_cycles=128,
+            acl_block_events=0,
+        )
+
+        def fake_v3_helper(ser, algo, chunks, timeout_s, **kwargs):
+            progress_cb = kwargs["progress_cb"]
+            progress_cb(
+                acked_chunks=1,
+                total_chunks=1,
+                processed_bytes=128,
+                total_bytes=128,
+                chunk_bytes=128,
+                elapsed_s=0.003,
+                throughput_mbps=(128 * 8) / 0.003 / 1_000_000.0,
+            )
+            return worker_mod.StreamSessionResult(
+                total_chunks=1,
+                acked_chunks=1,
+                ciphertext=b"\x55" * 128,
+                session_elapsed_s=0.003,
+                effective_mbps=(128 * 8) / 0.003 / 1_000_000.0,
+            )
+
+        def fake_run_case(ser, case, timeout_s):
+            if case.kind == "pmu_clear":
+                return ProbeResult(
+                    case=case,
+                    rx=bytes([0x55, 0x02, 0x4A, 0x00]),
+                    passed=True,
+                    duration_s=0.001,
+                    pmu_clear_ack=PmuClearAck(status=0),
+                )
+            if case.kind == "pmu_query":
+                return ProbeResult(
+                    case=case,
+                    rx=pmu_snapshot.as_bytes(),
+                    passed=True,
+                    duration_s=0.001,
+                    pmu_snapshot=pmu_snapshot,
+                )
+            raise AssertionError(f"unexpected probe kind: {case.kind}")
+
+        with mock.patch.object(worker_mod, "Path", return_value=mock_input_path):
+            with mock.patch.object(worker_mod, "run_case_on_serial", side_effect=fake_run_case):
+                with mock.patch.object(
+                    worker_mod, "stream_encrypt_file_v3_on_serial", side_effect=fake_v3_helper
+                ) as stream_call:
+                    with mock.patch.object(
+                        worker_mod, "stream_encrypt_file_on_serial", side_effect=AssertionError("legacy V2 path must not run")
+                    ):
+                        worker._handle_encrypt_file("payload.bin", "SM4", 3.0)
+
+        stream_call.assert_called_once()
+        mock_output_path.write_bytes.assert_called_once()
+
+        events = worker.poll_events(8)
+        self.assertEqual(
+            [event.kind for event in events],
+            ["pmu_cleared", "file_begin", "file_progress", "file_done", "pmu_snapshot"],
+        )
+        progress_payload = events[2].payload
+        done_payload = events[3].payload
+        self.assertEqual(progress_payload["chunk_index"], 1)
+        self.assertEqual(progress_payload["chunk_count"], 1)
+        self.assertEqual(progress_payload["chunk"], 128)
+        self.assertAlmostEqual(progress_payload["elapsed_s"], 0.003)
+        self.assertAlmostEqual(done_payload["duration_s"], 0.003)
+        self.assertEqual(done_payload["chunk_count"], 1)
+        self.assertEqual(events[0].payload["status"], 0)
+        self.assertAlmostEqual(events[-1].payload["crypto_utilization"], 0.25)
+
+    def test_handle_case_emits_pmu_snapshot_event(self) -> None:
+        worker = worker_mod.GatewayWorker()
+        fake_serial = mock.Mock()
+        worker._serial = fake_serial
+
+        snapshot = PmuSnapshot(
+            clk_hz=50_000_000,
+            global_cycles=1000,
+            crypto_active_cycles=250,
+            uart_tx_stall_cycles=500,
+            stream_credit_block_cycles=125,
+            acl_block_events=2,
+        )
+        case = case_query_pmu()
+        result = ProbeResult(
+            case=case,
+            rx=snapshot.as_bytes(),
+            passed=True,
+            duration_s=0.001,
+            pmu_snapshot=snapshot,
+        )
+
+        with mock.patch.object(worker_mod, "run_case_on_serial", return_value=result):
+            worker._handle_case(case, 3.0)
+
+        events = worker.poll_events(1)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].kind, "pmu_snapshot")
+        self.assertEqual(events[0].payload["clk_hz"], 50_000_000)
+        self.assertAlmostEqual(events[0].payload["crypto_utilization"], 0.25)
+        self.assertAlmostEqual(events[0].payload["uart_stall_ratio"], 0.5)
+        self.assertAlmostEqual(events[0].payload["credit_block_ratio"], 0.125)
+        self.assertEqual(events[0].payload["acl_block_events"], 2)
+
+    def test_handle_case_emits_pmu_cleared_event(self) -> None:
+        worker = worker_mod.GatewayWorker()
+        fake_serial = mock.Mock()
+        worker._serial = fake_serial
+
+        case = case_clear_pmu()
+        result = ProbeResult(
+            case=case,
+            rx=bytes([0x55, 0x02, 0x4A, 0x00]),
+            passed=True,
+            duration_s=0.001,
+            pmu_clear_ack=PmuClearAck(status=0),
+        )
+
+        with mock.patch.object(worker_mod, "run_case_on_serial", return_value=result):
+            worker._handle_case(case, 3.0)
+
+        events = worker.poll_events(1)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].kind, "pmu_cleared")
+        self.assertEqual(events[0].payload["status"], 0)
+
+    def test_handle_encrypt_file_clears_and_queries_pmu_around_stream_run(self) -> None:
         worker = worker_mod.GatewayWorker()
         fake_serial = mock.Mock()
         worker._serial = fake_serial
@@ -127,43 +281,67 @@ class GatewayWorkerTests(unittest.TestCase):
         mock_output_path.__str__ = mock.Mock(return_value="payload.bin.sm4.bin")
         mock_input_path.with_name.return_value = mock_output_path
 
-        stream_results = iter(
-            [
-                worker_mod.StreamChunkResult(
-                    index=1,
-                    plaintext_len=128,
-                    ciphertext=b"\x55" * 128,
-                    write_elapsed_ms=0.5,
-                    read_elapsed_ms=2.5,
-                    chunk_elapsed_ms=3.0,
-                )
-            ]
+        pmu_snapshot = PmuSnapshot(
+            clk_hz=50_000_000,
+            global_cycles=2000,
+            crypto_active_cycles=300,
+            uart_tx_stall_cycles=1000,
+            stream_credit_block_cycles=200,
+            acl_block_events=0,
         )
 
+        def fake_v3_helper(ser, algo, chunks, timeout_s, **kwargs):
+            progress_cb = kwargs["progress_cb"]
+            progress_cb(
+                acked_chunks=1,
+                total_chunks=1,
+                processed_bytes=128,
+                total_bytes=128,
+                chunk_bytes=128,
+                elapsed_s=0.003,
+                throughput_mbps=(128 * 8) / 0.003 / 1_000_000.0,
+            )
+            return worker_mod.StreamSessionResult(
+                total_chunks=1,
+                acked_chunks=1,
+                ciphertext=b"\xAA" * 128,
+                session_elapsed_s=0.003,
+                effective_mbps=(128 * 8) / 0.003 / 1_000_000.0,
+            )
+
+        def fake_run_case(ser, case, timeout_s):
+            if case.kind == "pmu_clear":
+                return ProbeResult(
+                    case=case,
+                    rx=bytes([0x55, 0x02, 0x4A, 0x00]),
+                    passed=True,
+                    duration_s=0.001,
+                    pmu_clear_ack=PmuClearAck(status=0),
+                )
+            if case.kind == "pmu_query":
+                return ProbeResult(
+                    case=case,
+                    rx=pmu_snapshot.as_bytes(),
+                    passed=True,
+                    duration_s=0.001,
+                    pmu_snapshot=pmu_snapshot,
+                )
+            raise AssertionError(f"unexpected probe kind: {case.kind}")
+
         with mock.patch.object(worker_mod, "Path", return_value=mock_input_path):
-            with mock.patch.object(
-                worker_mod, "stream_encrypt_file_on_serial", return_value=stream_results
-            ) as stream_call:
+            with mock.patch.object(worker_mod, "run_case_on_serial", side_effect=fake_run_case):
                 with mock.patch.object(
-                    worker_mod, "run_case_on_serial", side_effect=AssertionError("probe path must not run")
+                    worker_mod, "stream_encrypt_file_v3_on_serial", side_effect=fake_v3_helper
                 ):
                     worker._handle_encrypt_file("payload.bin", "SM4", 3.0)
 
-        fake_serial.reset_input_buffer.assert_called_once_with()
-        fake_serial.reset_output_buffer.assert_called_once_with()
-        stream_call.assert_called_once()
-        mock_output_path.write_bytes.assert_called_once()
-
         events = worker.poll_events(8)
-        self.assertEqual([event.kind for event in events], ["file_begin", "file_progress", "file_done"])
-        progress_payload = events[1].payload
-        done_payload = events[2].payload
-        self.assertEqual(progress_payload["write_elapsed_ms"], 0.5)
-        self.assertEqual(progress_payload["read_elapsed_ms"], 2.5)
-        self.assertEqual(progress_payload["chunk_elapsed_ms"], 3.0)
-        self.assertEqual(done_payload["avg_write_ms"], 0.5)
-        self.assertEqual(done_payload["avg_read_ms"], 2.5)
-        self.assertEqual(done_payload["avg_chunk_ms"], 3.0)
+        self.assertEqual(
+            [event.kind for event in events],
+            ["pmu_cleared", "file_begin", "file_progress", "file_done", "pmu_snapshot"],
+        )
+        self.assertAlmostEqual(events[-1].payload["crypto_utilization"], 0.15)
+        self.assertEqual(events[-1].payload["acl_block_events"], 0)
 
     def test_stream_encrypt_file_v3_on_serial_times_out_when_rx_stalls(self) -> None:
         def on_write(fake_serial: FakeStreamSerial, data: bytes) -> None:

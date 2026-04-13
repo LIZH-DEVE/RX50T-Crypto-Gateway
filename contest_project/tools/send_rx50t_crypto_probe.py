@@ -10,13 +10,16 @@ except ImportError as exc:  # pragma: no cover
 
 from crypto_gateway_protocol import (
     AclRuleCounters,
+    PmuSnapshot,
     StatsCounters,
+    case_clear_pmu,
     case_aes_eight_block_vector,
     case_aes_four_block_vector,
     case_aes_known_vector,
     case_aes_two_block_vector,
     case_block_ascii,
     case_invalid_selector,
+    case_query_pmu,
     case_query_rule_stats,
     case_query_stats,
     case_sm4_eight_block_vector,
@@ -26,6 +29,25 @@ from crypto_gateway_protocol import (
     format_hex,
     run_case_on_serial,
 )
+
+
+def _print_pmu_snapshot(snapshot: PmuSnapshot) -> None:
+    print(
+        "[PMU] "
+        f"clk_hz={snapshot.clk_hz} "
+        f"global={snapshot.global_cycles} "
+        f"crypto_active={snapshot.crypto_active_cycles} "
+        f"uart_tx_stall={snapshot.uart_tx_stall_cycles} "
+        f"credit_block={snapshot.stream_credit_block_cycles} "
+        f"acl_block_events={snapshot.acl_block_events}"
+    )
+    print(
+        "[PMU_RATIO] "
+        f"hw_util={snapshot.crypto_utilization:.4f} "
+        f"uart_stall={snapshot.uart_stall_ratio:.4f} "
+        f"credit_block={snapshot.credit_block_ratio:.4f} "
+        f"elapsed_ms={snapshot.elapsed_ms_from_hw:.3f}"
+    )
 
 
 def main() -> int:
@@ -92,6 +114,16 @@ def main() -> int:
         help="Query the per-rule ACL counters and expect H x y z w p r t u newline",
     )
     parser.add_argument(
+        "--query-pmu",
+        action="store_true",
+        help="Query the PMU hardware snapshot and print raw counters plus derived ratios",
+    )
+    parser.add_argument(
+        "--clear-pmu",
+        action="store_true",
+        help="Clear the PMU hardware counters and expect 55 02 4A 00",
+    )
+    parser.add_argument(
         "--expect-stats",
         help="Expected counters as total,acl,aes,sm4,err for --query-stats, e.g. 3,1,1,1,1",
     )
@@ -117,6 +149,8 @@ def main() -> int:
             args.invalid_selector,
             args.query_stats,
             args.query_rule_stats,
+            args.query_pmu,
+            args.clear_pmu,
         )
         if flag
     )
@@ -126,7 +160,7 @@ def main() -> int:
             "--sm4-two-block-vector, --aes-two-block-vector, --sm4-four-block-vector, "
             "--aes-four-block-vector, --sm4-eight-block-vector, --aes-eight-block-vector, "
             "--block-ascii, --invalid-selector, "
-            "--query-stats, or --query-rule-stats"
+            "--query-stats, --query-rule-stats, --query-pmu, or --clear-pmu"
         )
 
     if args.sm4_known_vector:
@@ -173,6 +207,10 @@ def main() -> int:
                     raise SystemExit("--expect-rule-stats values must be between 0 and 255")
             expected_rule_stats = AclRuleCounters(*parts)
         case = case_query_rule_stats(expected_rule_stats)
+    elif args.query_pmu:
+        case = case_query_pmu()
+    elif args.clear_pmu:
+        case = case_clear_pmu()
     else:
         case = case_block_ascii(args.block_ascii)
 
@@ -181,6 +219,10 @@ def main() -> int:
         print("[EXPECT] stats response with 5 counters")
     elif args.query_rule_stats and case.expected is None:
         print("[EXPECT] rule stats response with 8 counters")
+    elif args.query_pmu and case.expected is None:
+        print("[EXPECT] PMU snapshot response with 5 counters + clk_hz")
+    elif args.clear_pmu and case.expected is None:
+        print("[EXPECT] PMU clear ACK 55 02 4A 00")
     else:
         print(f"[EXPECT] {format_hex(case.expected)}")
 
@@ -209,6 +251,16 @@ def main() -> int:
             else:
                 print(f"[HOT] {hot_rule}={hot_hits}")
             print("[PASS] rule stats query response matched format.")
+            return 0
+    elif args.query_pmu and case.expected is None:
+        if result.pmu_snapshot is not None:
+            _print_pmu_snapshot(result.pmu_snapshot)
+            print("[PASS] PMU snapshot response matched format.")
+            return 0
+    elif args.clear_pmu and case.expected is None:
+        if result.pmu_clear_ack is not None:
+            print(f"[PMU_CLEAR] status={result.pmu_clear_ack.status}")
+            print("[PASS] PMU clear ACK matched format.")
             return 0
     elif result.passed:
         print("[PASS] crypto probe response matched.")

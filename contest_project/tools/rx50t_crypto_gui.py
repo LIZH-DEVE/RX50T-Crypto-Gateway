@@ -19,8 +19,10 @@ from crypto_gateway_protocol import (
     case_block_ascii,
     case_invalid_selector,
     case_query_acl_keys,
+    case_query_pmu,
     case_query_rule_stats,
     case_query_stats,
+    case_clear_pmu,
     case_sm4_eight_block_vector,
     case_sm4_four_block_vector,
     case_sm4_known_vector,
@@ -56,6 +58,12 @@ class CryptoGatewayApp(tk.Tk):
         self.last_latency_label = tk.StringVar(value="-")
         self.banner_text = tk.StringVar(value="Ready. Connect the board and query stats.")
         self.hot_rule_text = tk.StringVar(value="Hot Rule (board): none yet")
+        self.pmu_vars = {
+            "hw_util": tk.StringVar(value="0.0%"),
+            "uart_stall": tk.StringVar(value="0.0%"),
+            "credit_block": tk.StringVar(value="0.0%"),
+            "acl_events": tk.StringVar(value="0"),
+        }
         self.rule_refresh_job: str | None = None
         self.file_name_text = tk.StringVar(value="No file queued")
         self.file_status_vars = {
@@ -397,10 +405,11 @@ class CryptoGatewayApp(tk.Tk):
 
         control_panel = self._make_panel(self.aux_zone)
         self.control_panel = control_panel
+        self.control_panel.configure(padx=12, pady=11)
         control_panel.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         self._section_heading(control_panel, "CONNECTION + QUICK ACTIONS")
         signal_row = tk.Frame(control_panel, bg=self.colors["panel_bg"])
-        signal_row.pack(fill="x", pady=(0, 10))
+        signal_row.pack(fill="x", pady=(0, 6))
         self.link_dot = tk.Label(signal_row, text=" ", bg="#fca5a5", width=2, padx=0, pady=0)
         self.link_dot.pack(side="left", padx=(0, 10))
         self.link_badge = tk.Label(
@@ -442,7 +451,7 @@ class CryptoGatewayApp(tk.Tk):
         self._make_action_button(conn_buttons, "Disconnect", self._disconnect).grid(row=0, column=2, sticky="ew")
 
         quick_panel = tk.Frame(control_panel, bg=self.colors["panel_bg"])
-        quick_panel.pack(fill="x", expand=False, pady=(10, 0))
+        quick_panel.pack(fill="x", expand=False, pady=(6, 0))
         tk.Label(
             quick_panel,
             text="TACTICAL ACTION GRID",
@@ -542,6 +551,53 @@ class CryptoGatewayApp(tk.Tk):
         self._make_action_button(deploy_panel, "Refresh Rules", self._refresh_acl_key_map).grid(
             row=1, column=5, sticky="ew"
         )
+
+        pmu_panel = tk.Frame(quick_panel, bg=self.colors["panel_bg"])
+        pmu_panel.pack(fill="x", pady=(10, 0))
+        for col in range(8):
+            pmu_panel.columnconfigure(col, weight=1 if col >= 3 else 0)
+        tk.Label(
+            pmu_panel,
+            text="PMU",
+            bg=self.colors["panel_bg"],
+            fg="#93c5fd",
+            font=("Segoe UI", 10, "bold"),
+            anchor="w",
+        ).grid(row=0, column=0, sticky="w", pady=(0, 6), padx=(0, 10))
+        self._make_action_button(pmu_panel, "Clear PMU", self._clear_pmu).grid(
+            row=0, column=1, sticky="ew", padx=(0, 8), pady=(0, 6)
+        )
+        self._make_action_button(pmu_panel, "Read PMU", self._read_pmu).grid(
+            row=0, column=2, sticky="ew", pady=(0, 6)
+        )
+        metric_strip = tk.Frame(pmu_panel, bg=self.colors["panel_bg"])
+        metric_strip.grid(row=1, column=0, columnspan=8, sticky="ew")
+        for col in range(8):
+            metric_strip.columnconfigure(col, weight=1)
+        for idx, (label, key, color) in enumerate(
+            [
+                ("HW Util", "hw_util", "#93c5fd"),
+                ("UART Stall", "uart_stall", "#f59e0b"),
+                ("Credit Block", "credit_block", "#fda4af"),
+                ("ACL Events", "acl_events", "#86efac"),
+            ]
+        ):
+            tk.Label(
+                metric_strip,
+                text=label.upper(),
+                bg=self.colors["panel_bg"],
+                fg=color,
+                font=("Segoe UI", 7, "bold"),
+                anchor="w",
+            ).grid(row=0, column=idx * 2, sticky="w", padx=(0, 4) if idx == 0 else (8, 4))
+            tk.Label(
+                metric_strip,
+                textvariable=self.pmu_vars[key],
+                bg=self.colors["panel_bg"],
+                fg=self.colors["text"],
+                font=("Consolas", 9, "bold"),
+                anchor="w",
+            ).grid(row=0, column=idx * 2 + 1, sticky="w")
 
         self.live_log_zone = self._make_panel(self.aux_zone)
         self.live_log_zone.grid(row=1, column=0, sticky="nsew")
@@ -776,6 +832,16 @@ class CryptoGatewayApp(tk.Tk):
         self._append_log("Queued: Query ACL Key Map")
         self._set_banner("Queued ACL key-map refresh.", "info")
 
+    def _clear_pmu(self) -> None:
+        self.worker.submit_case(case_clear_pmu())
+        self._append_log("Queued: Clear PMU")
+        self._set_banner("Queued PMU clear.", "warn")
+
+    def _read_pmu(self) -> None:
+        self.worker.submit_case(case_query_pmu())
+        self._append_log("Queued: Query PMU")
+        self._set_banner("Queued PMU snapshot readback.", "info")
+
     def _send_acl_probe(self) -> None:
         text = self.acl_text.get().strip()
         if not text:
@@ -835,6 +901,18 @@ class CryptoGatewayApp(tk.Tk):
             title = self.acl_rule_title_labels.get(idx)
             if title is not None:
                 title.configure(text=f"SLOT {idx}: {label}")
+
+    def _reset_pmu_display(self) -> None:
+        self.pmu_vars["hw_util"].set("0.0%")
+        self.pmu_vars["uart_stall"].set("0.0%")
+        self.pmu_vars["credit_block"].set("0.0%")
+        self.pmu_vars["acl_events"].set("0")
+
+    def _apply_pmu_snapshot(self, payload: dict) -> None:
+        self.pmu_vars["hw_util"].set(f"{float(payload['crypto_utilization']) * 100.0:.2f}%")
+        self.pmu_vars["uart_stall"].set(f"{float(payload['uart_stall_ratio']) * 100.0:.2f}%")
+        self.pmu_vars["credit_block"].set(f"{float(payload['credit_block_ratio']) * 100.0:.2f}%")
+        self.pmu_vars["acl_events"].set(str(int(payload["acl_block_events"])))
 
     def _draw_chart(self) -> None:
         self.chart.delete("all")
@@ -1168,6 +1246,33 @@ class CryptoGatewayApp(tk.Tk):
                 "error",
             )
             self._set_banner("ACL runtime update rejected by the board.", "error")
+        elif kind == "pmu_cleared":
+            self._record_transport_activity(len(payload["rx"]), float(payload["duration_s"]))
+            self._reset_pmu_display()
+            self._append_log(
+                f"PMU CLEARED: status={payload['status']} RX={format_hex(payload['rx'])}",
+                "pass" if payload["passed"] else "error",
+            )
+            self._set_banner("Hardware PMU counters cleared.", "pass" if payload["passed"] else "error")
+        elif kind == "pmu_snapshot":
+            self._record_transport_activity(len(payload["rx"]), float(payload["duration_s"]))
+            self._apply_pmu_snapshot(payload)
+            self._append_log(
+                "PMU SNAPSHOT: "
+                f"clk={payload['clk_hz']} "
+                f"global={payload['global_cycles']} "
+                f"crypto={payload['crypto_active_cycles']} "
+                f"uart_stall={payload['uart_tx_stall_cycles']} "
+                f"credit_block={payload['stream_credit_block_cycles']} "
+                f"acl_events={payload['acl_block_events']}",
+                "pass" if payload["passed"] else "error",
+            )
+            self._set_banner(
+                "PMU readback refreshed: "
+                f"HW Util {float(payload['crypto_utilization']) * 100.0:.2f}% / "
+                f"UART Stall {float(payload['uart_stall_ratio']) * 100.0:.2f}%",
+                "pass" if payload["passed"] else "error",
+            )
         elif kind == "file_begin":
             self._begin_file_status(payload)
             self._append_log(

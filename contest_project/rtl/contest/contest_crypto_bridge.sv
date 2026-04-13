@@ -10,6 +10,7 @@ module contest_crypto_bridge (
     input  wire       i_algo_sel,
 
     input  wire       uart_tx_ready,
+    output wire       o_pmu_crypto_active,
     output reg        bridge_valid,
     output reg [7:0]  bridge_data,
     output reg        bridge_last
@@ -114,6 +115,7 @@ module contest_crypto_bridge (
         (active_algo_q == ALG_SM4) &&
         sm4_start_seen_q &&
         (sm4_valid_burst_q != 3'd0);
+    assign o_pmu_crypto_active = worker_busy_q;
 
     contest_block_fifo #(
         .WIDTH (130),

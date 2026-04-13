@@ -61,6 +61,7 @@ module tb_contest_crypto_bridge;
     wire       bridge_valid;
     wire [7:0] bridge_data;
     wire       bridge_last;
+    wire       pmu_crypto_active;
 
     integer idx;
 
@@ -72,6 +73,7 @@ module tb_contest_crypto_bridge;
         .acl_last     (acl_last),
         .i_algo_sel   (algo_sel),
         .uart_tx_ready(uart_tx_ready),
+        .o_pmu_crypto_active(pmu_crypto_active),
         .bridge_valid (bridge_valid),
         .bridge_data  (bridge_data),
         .bridge_last  (bridge_last)
@@ -166,6 +168,10 @@ module tb_contest_crypto_bridge;
             end
         join
 
+        if (pmu_crypto_active !== dut.worker_busy_q) begin
+            $fatal(1, "PMU crypto-active tap mismatch after SM4 block");
+        end
+
         repeat (20) @(posedge clk);
 
         // AES 16-byte block should encrypt with the fixed AES-128 test key.
@@ -182,6 +188,10 @@ module tb_contest_crypto_bridge;
                 end
             end
         join
+
+        if (pmu_crypto_active !== dut.worker_busy_q) begin
+            $fatal(1, "PMU crypto-active tap mismatch after AES block");
+        end
 
         repeat (20) @(posedge clk);
 
@@ -284,6 +294,10 @@ module tb_contest_crypto_bridge;
                 end
             end
         join
+
+        if (pmu_crypto_active !== dut.worker_busy_q) begin
+            $fatal(1, "PMU crypto-active tap mismatch at end of test");
+        end
 
         $display("contest_crypto_bridge test passed.");
         $finish;

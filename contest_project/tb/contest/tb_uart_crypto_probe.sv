@@ -57,6 +57,7 @@ module tb_uart_crypto_probe;
     reg uart_rx;
     wire uart_tx;
     integer stage_q;
+    reg [7:0] pmu_rx_bytes [0:47];
 
     rx50t_uart_crypto_probe_top #(
         .CLK_HZ(CLK_HZ),
@@ -138,6 +139,50 @@ module tb_uart_crypto_probe;
         end
     endtask
 
+    task automatic uart_read_byte(output [7:0] actual);
+        integer bit_idx;
+        reg [7:0] sample;
+        begin
+            sample = 8'd0;
+            uart_wait_for_start();
+            #(BIT_PERIODNS);
+            for (bit_idx = 0; bit_idx < 8; bit_idx = bit_idx + 1) begin
+                sample[bit_idx] = uart_tx;
+                #(BIT_PERIODNS);
+            end
+            if (uart_tx !== 1'b1) begin
+                $fatal(1, "UART stop bit invalid");
+            end
+            actual = sample;
+        end
+    endtask
+
+    task automatic uart_expect_pmu_zero_snapshot;
+        integer zero_idx;
+        begin
+            uart_expect_byte(8'h55);
+            uart_expect_byte(8'h2E);
+            uart_expect_byte(8'h50);
+            uart_expect_byte(8'h01);
+            uart_expect_byte(8'h00);
+            uart_expect_byte(8'h0F);
+            uart_expect_byte(8'h42);
+            uart_expect_byte(8'h40);
+            for (zero_idx = 0; zero_idx < 40; zero_idx = zero_idx + 1) begin
+                uart_expect_byte(8'h00);
+            end
+        end
+    endtask
+
+    task automatic uart_read_pmu_snapshot;
+        integer idx;
+        begin
+            for (idx = 0; idx < 48; idx = idx + 1) begin
+                uart_read_byte(pmu_rx_bytes[idx]);
+            end
+        end
+    endtask
+
     initial begin
         rst_n   = 1'b0;
         uart_rx = 1'b1;
@@ -148,6 +193,22 @@ module tb_uart_crypto_probe;
         #(200 * CLK_PERIODNS);
 
         stage_q = 1;
+        // Query PMU immediately after reset -> all zero.
+        fork
+            begin
+                uart_send_byte(8'h55);
+                uart_send_byte(8'd1);
+                uart_send_byte(8'h50);
+            end
+            begin
+                uart_expect_pmu_zero_snapshot();
+            end
+        join
+        $display("tb_uart_crypto_probe: initial PMU snapshot passed");
+
+        #(20 * BIT_PERIODNS);
+
+        stage_q = 2;
         // ACL blocked frame -> D\n
         fork
             begin
@@ -166,7 +227,76 @@ module tb_uart_crypto_probe;
 
         #(20 * BIT_PERIODNS);
 
-        stage_q = 2;
+        stage_q = 3;
+        // Query PMU and confirm exactly one ACL block event was captured.
+        fork
+            begin
+                uart_send_byte(8'h55);
+                uart_send_byte(8'd1);
+                uart_send_byte(8'h50);
+            end
+            begin
+                uart_read_pmu_snapshot();
+            end
+        join
+        if ((pmu_rx_bytes[0] !== 8'h55) || (pmu_rx_bytes[1] !== 8'h2E) ||
+            (pmu_rx_bytes[2] !== 8'h50) || (pmu_rx_bytes[3] !== 8'h01)) begin
+            $fatal(1, "PMU snapshot header mismatch after ACL block");
+        end
+        if ((pmu_rx_bytes[4] !== 8'h00) || (pmu_rx_bytes[5] !== 8'h0F) ||
+            (pmu_rx_bytes[6] !== 8'h42) || (pmu_rx_bytes[7] !== 8'h40)) begin
+            $fatal(1, "PMU snapshot clk_hz mismatch after ACL block");
+        end
+        if ((pmu_rx_bytes[40] !== 8'h00) || (pmu_rx_bytes[41] !== 8'h00) ||
+            (pmu_rx_bytes[42] !== 8'h00) || (pmu_rx_bytes[43] !== 8'h00) ||
+            (pmu_rx_bytes[44] !== 8'h00) || (pmu_rx_bytes[45] !== 8'h00) ||
+            (pmu_rx_bytes[46] !== 8'h00) || (pmu_rx_bytes[47] !== 8'h01)) begin
+            $fatal(1, "PMU ACL block event counter mismatch after ACL block");
+        end
+        if ({pmu_rx_bytes[8], pmu_rx_bytes[9], pmu_rx_bytes[10], pmu_rx_bytes[11],
+             pmu_rx_bytes[12], pmu_rx_bytes[13], pmu_rx_bytes[14], pmu_rx_bytes[15]} == 64'd0) begin
+            $fatal(1, "PMU global cycle counter did not advance after ACL block");
+        end
+        $display("tb_uart_crypto_probe: PMU ACL event snapshot passed");
+
+        #(20 * BIT_PERIODNS);
+
+        stage_q = 4;
+        // Clear PMU -> ACK.
+        fork
+            begin
+                uart_send_byte(8'h55);
+                uart_send_byte(8'd1);
+                uart_send_byte(8'h4A);
+            end
+            begin
+                uart_expect_byte(8'h55);
+                uart_expect_byte(8'h02);
+                uart_expect_byte(8'h4A);
+                uart_expect_byte(8'h00);
+            end
+        join
+        $display("tb_uart_crypto_probe: PMU clear ACK passed");
+
+        #(20 * BIT_PERIODNS);
+
+        stage_q = 5;
+        // Query PMU again -> all zero after clear.
+        fork
+            begin
+                uart_send_byte(8'h55);
+                uart_send_byte(8'd1);
+                uart_send_byte(8'h50);
+            end
+            begin
+                uart_expect_pmu_zero_snapshot();
+            end
+        join
+        $display("tb_uart_crypto_probe: PMU clear-to-zero passed");
+
+        #(20 * BIT_PERIODNS);
+
+        stage_q = 6;
         // Default 16-byte frame -> SM4 ciphertext.
         fork
             begin
@@ -186,7 +316,7 @@ module tb_uart_crypto_probe;
 
         #(20 * BIT_PERIODNS);
 
-        stage_q = 3;
+        stage_q = 7;
         // Explicit AES mode: 'A' + 16-byte plaintext -> AES ciphertext.
         fork
             begin
@@ -207,7 +337,7 @@ module tb_uart_crypto_probe;
 
         #(20 * BIT_PERIODNS);
 
-        stage_q = 4;
+        stage_q = 8;
         // Default 32-byte frame -> two-block SM4 ciphertext.
         fork
             begin
@@ -227,7 +357,7 @@ module tb_uart_crypto_probe;
 
         #(20 * BIT_PERIODNS);
 
-        stage_q = 5;
+        stage_q = 9;
         // Explicit AES mode: 'A' + 32-byte plaintext -> two-block AES ciphertext.
         fork
             begin
@@ -248,7 +378,7 @@ module tb_uart_crypto_probe;
 
         #(20 * BIT_PERIODNS);
 
-        stage_q = 6;
+        stage_q = 10;
         // Default 64-byte frame -> four-block SM4 ciphertext.
         fork
             begin
@@ -268,7 +398,7 @@ module tb_uart_crypto_probe;
 
         #(20 * BIT_PERIODNS);
 
-        stage_q = 7;
+        stage_q = 11;
         // Explicit AES mode: 'A' + 64-byte plaintext -> four-block AES ciphertext.
         fork
             begin
@@ -289,7 +419,7 @@ module tb_uart_crypto_probe;
 
         #(20 * BIT_PERIODNS);
 
-        stage_q = 8;
+        stage_q = 12;
         // Default 128-byte frame -> eight-block SM4 ciphertext.
         fork
             begin
@@ -309,7 +439,7 @@ module tb_uart_crypto_probe;
 
         #(20 * BIT_PERIODNS);
 
-        stage_q = 9;
+        stage_q = 13;
         // Explicit AES mode: 'A' + 128-byte plaintext -> eight-block AES ciphertext.
         fork
             begin
@@ -330,7 +460,7 @@ module tb_uart_crypto_probe;
 
         #(20 * BIT_PERIODNS);
 
-        stage_q = 10;
+        stage_q = 14;
         // New default BRAM-backed rule: P should also block.
         fork
             begin
@@ -349,7 +479,7 @@ module tb_uart_crypto_probe;
 
         #(20 * BIT_PERIODNS);
 
-        stage_q = 11;
+        stage_q = 15;
         // Invalid explicit selector -> E\n
         fork
             begin
@@ -369,7 +499,7 @@ module tb_uart_crypto_probe;
 
         #(20 * BIT_PERIODNS);
 
-        stage_q = 12;
+        stage_q = 16;
         // Query the live ACL key map.
         fork
             begin
@@ -394,7 +524,7 @@ module tb_uart_crypto_probe;
 
         #(20 * BIT_PERIODNS);
 
-        stage_q = 13;
+        stage_q = 17;
         // Rewrite slot 3 from W to Q and expect control-plane ACK.
         fork
             begin
@@ -415,7 +545,7 @@ module tb_uart_crypto_probe;
 
         #(20 * BIT_PERIODNS);
 
-        stage_q = 14;
+        stage_q = 18;
         // Query the live ACL key map again and confirm slot 3 changed to Q.
         fork
             begin
@@ -440,7 +570,7 @@ module tb_uart_crypto_probe;
 
         #(20 * BIT_PERIODNS);
 
-        stage_q = 15;
+        stage_q = 19;
         // New runtime rule Q should block immediately.
         fork
             begin
@@ -459,7 +589,7 @@ module tb_uart_crypto_probe;
 
         #(20 * BIT_PERIODNS);
 
-        stage_q = 16;
+        stage_q = 20;
         // Duplicate key rewrite should reject with E\n.
         fork
             begin
@@ -478,7 +608,7 @@ module tb_uart_crypto_probe;
 
         #(20 * BIT_PERIODNS);
 
-        stage_q = 17;
+        stage_q = 21;
         // Query per-slot counters -> H c0..c7 \n
         fork
             begin
@@ -503,7 +633,7 @@ module tb_uart_crypto_probe;
 
         #(20 * BIT_PERIODNS);
 
-        stage_q = 18;
+        stage_q = 22;
         // Query aggregate counters -> S total acl aes sm4 err \n
         fork
             begin

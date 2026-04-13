@@ -63,6 +63,46 @@ class CryptoGatewayGuiLayoutTests(unittest.TestCase):
         finally:
             app.destroy()
 
+    def test_pmu_events_update_and_clear_runtime_panel(self) -> None:
+        app = gui.CryptoGatewayApp()
+        try:
+            app._handle_event(
+                gui.WorkerEvent(
+                    kind="pmu_snapshot",
+                    payload={
+                        "rx": bytes.fromhex("55 2E 50 01"),
+                        "duration_s": 0.001,
+                        "passed": True,
+                        "clk_hz": 50_000_000,
+                        "global_cycles": 1000,
+                        "crypto_active_cycles": 250,
+                        "uart_tx_stall_cycles": 500,
+                        "stream_credit_block_cycles": 125,
+                        "acl_block_events": 2,
+                        "crypto_utilization": 0.25,
+                        "uart_stall_ratio": 0.5,
+                        "credit_block_ratio": 0.125,
+                    },
+                )
+            )
+            self.assertEqual(app.pmu_vars["hw_util"].get(), "25.00%")
+            self.assertEqual(app.pmu_vars["uart_stall"].get(), "50.00%")
+            self.assertEqual(app.pmu_vars["credit_block"].get(), "12.50%")
+            self.assertEqual(app.pmu_vars["acl_events"].get(), "2")
+
+            app._handle_event(
+                gui.WorkerEvent(
+                    kind="pmu_cleared",
+                    payload={"rx": bytes([0x55, 0x02, 0x4A, 0x00]), "duration_s": 0.001, "passed": True, "status": 0},
+                )
+            )
+            self.assertEqual(app.pmu_vars["hw_util"].get(), "0.0%")
+            self.assertEqual(app.pmu_vars["uart_stall"].get(), "0.0%")
+            self.assertEqual(app.pmu_vars["credit_block"].get(), "0.0%")
+            self.assertEqual(app.pmu_vars["acl_events"].get(), "0")
+        finally:
+            app.destroy()
+
 
 if __name__ == "__main__":
     unittest.main()

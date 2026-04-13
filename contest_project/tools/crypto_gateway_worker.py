@@ -14,7 +14,22 @@ except ImportError as exc:  # pragma: no cover
         "pyserial is required. Install it with: py -3 -m pip install pyserial"
     ) from exc
 
-from crypto_gateway_protocol import build_frame, plan_file_chunks_for_transport, read_exact, run_case_on_serial
+from crypto_gateway_protocol import (
+    StreamBlockResponse,
+    StreamCipherResponse,
+    StreamErrorResponse,
+    StreamStartAck,
+    build_frame,
+    case_clear_pmu,
+    case_query_pmu,
+    build_stream_capability_query,
+    build_stream_chunk_frame,
+    build_stream_start_frame,
+    parse_stream_response,
+    plan_file_chunks_for_transport,
+    read_exact,
+    run_case_on_serial,
+)
 
 
 @dataclass(frozen=True)
@@ -31,6 +46,47 @@ class StreamChunkResult:
     write_elapsed_ms: float
     read_elapsed_ms: float
     chunk_elapsed_ms: float
+
+
+@dataclass(frozen=True)
+class StreamSessionResult:
+    total_chunks: int
+    acked_chunks: int
+    ciphertext: bytes
+    session_elapsed_s: float
+    effective_mbps: float
+
+
+def _read_framed_response(
+    ser: serial.Serial,
+    *,
+    timeout_s: float,
+    watchdog_s: float,
+) -> bytes:
+    started = time.perf_counter()
+    header = bytearray()
+    while len(header) < 2:
+        chunk = ser.read(2 - len(header))
+        if chunk:
+            header.extend(chunk)
+            continue
+        elapsed = time.perf_counter() - started
+        if elapsed >= min(timeout_s, watchdog_s):
+            raise RuntimeError("Hardware Link Timeout")
+
+    payload_len = header[1]
+    payload = bytearray()
+    payload_started = time.perf_counter()
+    while len(payload) < payload_len:
+        chunk = ser.read(payload_len - len(payload))
+        if chunk:
+            payload.extend(chunk)
+            continue
+        elapsed = time.perf_counter() - payload_started
+        if elapsed >= min(timeout_s, watchdog_s):
+            raise RuntimeError("Hardware Link Timeout")
+
+    return bytes(header + payload)
 
 
 def _reset_serial_buffers(ser: serial.Serial) -> None:
@@ -80,6 +136,115 @@ def stream_encrypt_file_on_serial(
             read_elapsed_ms=(read_finished - read_started) * 1000.0,
             chunk_elapsed_ms=(read_finished - chunk_started) * 1000.0,
         )
+
+
+def stream_encrypt_file_v3_on_serial(
+    ser: serial.Serial,
+    algo: str,
+    chunks: tuple[bytes, ...],
+    timeout_s: float,
+    *,
+    watchdog_s: float = 2.0,
+    progress_cb=None,
+    report_interval_s: float = 0.1,
+) -> StreamSessionResult:
+    if not chunks:
+        raise ValueError("chunks must not be empty")
+
+    capability_started = time.perf_counter()
+    ser.write(build_stream_capability_query())
+    capability = parse_stream_response(
+        _read_framed_response(ser, timeout_s=timeout_s, watchdog_s=watchdog_s)
+    )
+    if not hasattr(capability, "chunk_size"):
+        raise RuntimeError("Invalid stream capability response")
+    if capability.chunk_size != 128:
+        raise RuntimeError(f"Unsupported stream chunk size: {capability.chunk_size}")
+
+    ser.write(build_stream_start_frame(algo, len(chunks)))
+    start_ack = parse_stream_response(
+        _read_framed_response(ser, timeout_s=timeout_s, watchdog_s=watchdog_s)
+    )
+    if not isinstance(start_ack, StreamStartAck) or start_ack.status != 0:
+        raise RuntimeError("Stream session start rejected")
+
+    window = max(1, int(capability.window))
+    started = capability_started
+    last_progress = time.perf_counter()
+    send_index = 0
+    committed_index = 0
+    outstanding: dict[int, int] = {}
+    received: dict[int, bytes] = {}
+    ciphertext = bytearray()
+    last_reported_chunks = 0
+    last_report_time = started
+
+    while committed_index < len(chunks):
+        while send_index < len(chunks) and len(outstanding) < window:
+            seq = send_index & 0xFF
+            if seq in outstanding:
+                raise RuntimeError(f"Stream seq collision at 0x{seq:02X}")
+            ser.write(build_stream_chunk_frame(seq, chunks[send_index]))
+            outstanding[seq] = send_index
+            send_index += 1
+            last_progress = time.perf_counter()
+
+        response = parse_stream_response(
+            _read_framed_response(ser, timeout_s=timeout_s, watchdog_s=watchdog_s)
+        )
+        last_progress = time.perf_counter()
+
+        if isinstance(response, StreamCipherResponse):
+            if response.seq not in outstanding:
+                raise RuntimeError(f"Unexpected stream seq 0x{response.seq:02X}")
+            absolute_index = outstanding.pop(response.seq)
+            received[absolute_index] = response.ciphertext
+            while committed_index in received:
+                ciphertext.extend(received.pop(committed_index))
+                committed_index += 1
+            elapsed = max(time.perf_counter() - started, 1e-9)
+            should_report = (
+                progress_cb is not None and (
+                    committed_index == len(chunks) or
+                    committed_index != last_reported_chunks and
+                    (time.perf_counter() - last_report_time) >= report_interval_s
+                )
+            )
+            if should_report:
+                progress_cb(
+                    acked_chunks=committed_index,
+                    total_chunks=len(chunks),
+                    processed_bytes=len(ciphertext),
+                    total_bytes=len(chunks) * capability.chunk_size,
+                    chunk_bytes=len(response.ciphertext),
+                    elapsed_s=elapsed,
+                    throughput_mbps=(len(ciphertext) * 8) / elapsed / 1_000_000.0,
+                )
+                last_reported_chunks = committed_index
+                last_report_time = time.perf_counter()
+            continue
+
+        if isinstance(response, StreamBlockResponse):
+            raise RuntimeError(
+                f"ACL blocked stream chunk seq=0x{response.seq:02X} slot={response.slot}"
+            )
+
+        if isinstance(response, StreamErrorResponse):
+            raise RuntimeError(f"Stream error code=0x{response.code:02X}")
+
+        raise RuntimeError("Unexpected stream response type")
+
+        if (time.perf_counter() - last_progress) >= watchdog_s:
+            raise RuntimeError("Hardware Link Timeout")
+
+    elapsed = max(time.perf_counter() - started, 1e-9)
+    return StreamSessionResult(
+        total_chunks=len(chunks),
+        acked_chunks=committed_index,
+        ciphertext=bytes(ciphertext),
+        session_elapsed_s=elapsed,
+        effective_mbps=(len(ciphertext) * 8) / elapsed / 1_000_000.0,
+    )
 
 
 class GatewayWorker:
@@ -200,6 +365,25 @@ class GatewayWorker:
     def _handle_case(self, case, timeout_s: float) -> None:
         ser = self._ensure_serial()
         result = run_case_on_serial(ser, case, timeout_s)
+        if result.pmu_snapshot is not None:
+            self._emit_pmu_snapshot(result)
+            return
+
+        if result.pmu_clear_ack is not None:
+            self._emit(
+                "pmu_cleared",
+                name=case.name,
+                tx=result.tx,
+                rx=result.rx,
+                expected=result.expected,
+                passed=result.passed,
+                duration_s=result.duration_s,
+                throughput_mbps=result.throughput_mbps,
+                description=case.description,
+                status=result.pmu_clear_ack.status,
+            )
+            return
+
         if result.acl_write_ack is not None:
             self._emit(
                 "acl_write_ack",
@@ -260,6 +444,55 @@ class GatewayWorker:
             description=case.description,
         )
 
+    def _emit_pmu_snapshot(self, result) -> None:
+        snapshot = result.pmu_snapshot
+        if snapshot is None:
+            raise RuntimeError("missing PMU snapshot")
+        self._emit(
+            "pmu_snapshot",
+            name=result.case.name,
+            tx=result.tx,
+            rx=result.rx,
+            expected=result.expected,
+            passed=result.passed,
+            duration_s=result.duration_s,
+            throughput_mbps=result.throughput_mbps,
+            description=result.case.description,
+            clk_hz=snapshot.clk_hz,
+            global_cycles=snapshot.global_cycles,
+            crypto_active_cycles=snapshot.crypto_active_cycles,
+            uart_tx_stall_cycles=snapshot.uart_tx_stall_cycles,
+            stream_credit_block_cycles=snapshot.stream_credit_block_cycles,
+            acl_block_events=snapshot.acl_block_events,
+            crypto_utilization=snapshot.crypto_utilization,
+            uart_stall_ratio=snapshot.uart_stall_ratio,
+            credit_block_ratio=snapshot.credit_block_ratio,
+            elapsed_ms_from_hw=snapshot.elapsed_ms_from_hw,
+        )
+
+    def _query_pmu_after_session(self, ser: serial.Serial, timeout_s: float) -> None:
+        result = run_case_on_serial(ser, case_query_pmu(), timeout_s)
+        if result.pmu_snapshot is None:
+            raise RuntimeError("invalid PMU snapshot response")
+        self._emit_pmu_snapshot(result)
+
+    def _clear_pmu_before_session(self, ser: serial.Serial, timeout_s: float) -> None:
+        result = run_case_on_serial(ser, case_clear_pmu(), timeout_s)
+        if result.pmu_clear_ack is None:
+            raise RuntimeError("invalid PMU clear response")
+        self._emit(
+            "pmu_cleared",
+            name=result.case.name,
+            tx=result.tx,
+            rx=result.rx,
+            expected=result.expected,
+            passed=result.passed,
+            duration_s=result.duration_s,
+            throughput_mbps=result.throughput_mbps,
+            description=result.case.description,
+            status=result.pmu_clear_ack.status,
+        )
+
     def _handle_encrypt_file(
         self, input_path: str, algo: str, timeout_s: float, force_flush: bool = False
     ) -> None:
@@ -269,7 +502,7 @@ class GatewayWorker:
         if not raw:
             raise RuntimeError("Selected file is empty")
         plan = plan_file_chunks_for_transport(raw)
-        _reset_serial_buffers(ser)
+        self._clear_pmu_before_session(ser, timeout_s)
         self._emit(
             "file_begin",
             path=str(path),
@@ -282,55 +515,66 @@ class GatewayWorker:
         )
 
         ciphertext = bytearray()
-        processed_transport = 0
-        total_write_ms = 0.0
-        total_read_ms = 0.0
-        total_chunk_ms = 0.0
-        for result in stream_encrypt_file_on_serial(
-            ser, algo, plan.chunks, timeout_s, force_flush=force_flush
-        ):
-            ciphertext.extend(result.ciphertext)
-            processed_transport += result.plaintext_len
-            total_write_ms += result.write_elapsed_ms
-            total_read_ms += result.read_elapsed_ms
-            total_chunk_ms += result.chunk_elapsed_ms
-            elapsed = max(total_chunk_ms / 1000.0, 1e-9)
+        def emit_progress(
+            *,
+            acked_chunks: int,
+            total_chunks: int,
+            processed_bytes: int,
+            total_bytes: int,
+            chunk_bytes: int,
+            elapsed_s: float,
+            throughput_mbps: float,
+        ) -> None:
             self._emit(
                 "file_progress",
                 path=str(path),
                 algo=algo.upper(),
-                processed=processed_transport,
-                total=plan.padded_size,
+                processed=processed_bytes,
+                total=total_bytes,
                 original_total=plan.original_size,
                 pad_bytes=plan.pad_bytes,
-                chunk_index=result.index,
-                chunk_count=plan.chunk_count,
-                chunk=result.plaintext_len,
-                throughput_mbps=(processed_transport * 8) / elapsed / 1_000_000.0,
-                elapsed_s=elapsed,
-                write_elapsed_ms=result.write_elapsed_ms,
-                read_elapsed_ms=result.read_elapsed_ms,
-                chunk_elapsed_ms=result.chunk_elapsed_ms,
+                chunk_index=acked_chunks,
+                chunk_count=total_chunks,
+                chunk=chunk_bytes,
+                throughput_mbps=throughput_mbps,
+                elapsed_s=elapsed_s,
+                write_elapsed_ms=0.0,
+                read_elapsed_ms=0.0,
+                chunk_elapsed_ms=0.0,
             )
+        try:
+            result = stream_encrypt_file_v3_on_serial(
+                ser,
+                algo,
+                plan.chunks,
+                timeout_s,
+                progress_cb=emit_progress,
+            )
+            ciphertext.extend(result.ciphertext)
+            suffix = ".aes.bin" if algo.strip().upper() == "AES" else ".sm4.bin"
+            output_path = path.with_name(path.name + suffix)
+            output_path.write_bytes(bytes(ciphertext))
+            self._emit(
+                "file_done",
+                path=str(path),
+                output_path=str(output_path),
+                algo=algo.upper(),
+                total_bytes=plan.padded_size,
+                original_bytes=plan.original_size,
+                pad_bytes=plan.pad_bytes,
+                chunk_count=plan.chunk_count,
+                duration_s=result.session_elapsed_s,
+                throughput_mbps=result.effective_mbps,
+                avg_write_ms=0.0,
+                avg_read_ms=0.0,
+                avg_chunk_ms=(result.session_elapsed_s * 1000.0) / max(result.total_chunks, 1),
+                force_flush=force_flush,
+            )
+        except Exception:
+            try:
+                self._query_pmu_after_session(ser, timeout_s)
+            except Exception:
+                pass
+            raise
 
-        elapsed = max(total_chunk_ms / 1000.0, 1e-9)
-        chunk_count = max(plan.chunk_count, 1)
-        suffix = ".aes.bin" if algo.strip().upper() == "AES" else ".sm4.bin"
-        output_path = path.with_name(path.name + suffix)
-        output_path.write_bytes(bytes(ciphertext))
-        self._emit(
-            "file_done",
-            path=str(path),
-            output_path=str(output_path),
-            algo=algo.upper(),
-            total_bytes=plan.padded_size,
-            original_bytes=plan.original_size,
-            pad_bytes=plan.pad_bytes,
-            chunk_count=plan.chunk_count,
-            duration_s=elapsed,
-            throughput_mbps=(plan.padded_size * 8) / elapsed / 1_000_000.0,
-            avg_write_ms=total_write_ms / chunk_count,
-            avg_read_ms=total_read_ms / chunk_count,
-            avg_chunk_ms=total_chunk_ms / chunk_count,
-            force_flush=force_flush,
-        )
+        self._query_pmu_after_session(ser, timeout_s)

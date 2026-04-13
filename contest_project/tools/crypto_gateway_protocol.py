@@ -101,6 +101,58 @@ class AclRuleCounters:
 
 
 @dataclass(frozen=True)
+class PmuSnapshot:
+    clk_hz: int
+    global_cycles: int
+    crypto_active_cycles: int
+    uart_tx_stall_cycles: int
+    stream_credit_block_cycles: int
+    acl_block_events: int
+
+    def as_bytes(self) -> bytes:
+        payload = bytearray([0x50, 0x01])
+        payload.extend(self.clk_hz.to_bytes(4, "big"))
+        payload.extend(self.global_cycles.to_bytes(8, "big"))
+        payload.extend(self.crypto_active_cycles.to_bytes(8, "big"))
+        payload.extend(self.uart_tx_stall_cycles.to_bytes(8, "big"))
+        payload.extend(self.stream_credit_block_cycles.to_bytes(8, "big"))
+        payload.extend(self.acl_block_events.to_bytes(8, "big"))
+        return bytes([0x55, len(payload)]) + bytes(payload)
+
+    @property
+    def crypto_utilization(self) -> float:
+        if self.global_cycles <= 0:
+            return 0.0
+        return self.crypto_active_cycles / self.global_cycles
+
+    @property
+    def uart_stall_ratio(self) -> float:
+        if self.global_cycles <= 0:
+            return 0.0
+        return self.uart_tx_stall_cycles / self.global_cycles
+
+    @property
+    def credit_block_ratio(self) -> float:
+        if self.global_cycles <= 0:
+            return 0.0
+        return self.stream_credit_block_cycles / self.global_cycles
+
+    @property
+    def elapsed_ms_from_hw(self) -> float:
+        if self.clk_hz <= 0:
+            return 0.0
+        return (self.global_cycles / self.clk_hz) * 1000.0
+
+
+@dataclass(frozen=True)
+class PmuClearAck:
+    status: int
+
+    def as_bytes(self) -> bytes:
+        return bytes([0x55, 0x02, 0x4A, self.status])
+
+
+@dataclass(frozen=True)
 class ProbeCase:
     name: str
     tx: bytes
@@ -120,6 +172,8 @@ class ProbeResult:
     rule_stats: AclRuleCounters | None = None
     acl_write_ack: AclWriteAck | None = None
     acl_key_map: AclKeyMap | None = None
+    pmu_snapshot: PmuSnapshot | None = None
+    pmu_clear_ack: PmuClearAck | None = None
 
     @property
     def tx(self) -> bytes:
@@ -149,12 +203,68 @@ class FileChunkPlan:
         return len(self.chunks)
 
 
+@dataclass(frozen=True)
+class StreamCapabilities:
+    chunk_size: int
+    window: int
+    flags: int
+
+
+@dataclass(frozen=True)
+class StreamStartAck:
+    status: int
+
+
+@dataclass(frozen=True)
+class StreamCipherResponse:
+    seq: int
+    ciphertext: bytes
+
+
+@dataclass(frozen=True)
+class StreamBlockResponse:
+    seq: int
+    slot: int
+
+
+@dataclass(frozen=True)
+class StreamErrorResponse:
+    code: int
+
+
 def build_frame(payload: bytes) -> bytes:
     if not payload:
         raise ValueError("payload must not be empty")
     if len(payload) > 255:
         raise ValueError("payload length must be <= 255 bytes")
     return bytes([0x55, len(payload)]) + payload
+
+
+def _normalize_algo_tag(algo: str) -> int:
+    normalized = algo.strip().upper()
+    if normalized == "AES":
+        return 0x41
+    if normalized == "SM4":
+        return 0x53
+    raise ValueError("algo must be AES or SM4")
+
+
+def build_stream_capability_query() -> bytes:
+    return build_frame(b"W")
+
+
+def build_stream_start_frame(algo: str, total_chunks: int) -> bytes:
+    if not 0 <= total_chunks <= 0xFFFF:
+        raise ValueError("total_chunks must be in 0..65535")
+    return build_frame(bytes([0x4D, _normalize_algo_tag(algo), (total_chunks >> 8) & 0xFF, total_chunks & 0xFF]))
+
+
+def build_stream_chunk_frame(seq: int, payload: bytes) -> bytes:
+    if not 0 <= seq <= 0xFF:
+        raise ValueError("seq must be in 0..255")
+    if len(payload) != 128:
+        raise ValueError("stream payload must be exactly 128 bytes")
+    return build_frame(bytes([seq]) + payload)
 
 
 def format_hex(data: bytes) -> str:
@@ -211,6 +321,48 @@ def parse_acl_key_map_response(raw: bytes) -> AclKeyMap:
     if len(raw) != 10 or raw[:1] != b"K" or raw[-1:] != b"\n":
         raise ValueError(f"invalid ACL key-map response: {format_hex(raw)}")
     return AclKeyMap(tuple(raw[1:9]))
+
+
+def parse_pmu_snapshot_response(raw: bytes) -> PmuSnapshot:
+    if len(raw) != 48 or raw[:4] != bytes([0x55, 0x2E, 0x50, 0x01]):
+        raise ValueError(f"invalid PMU snapshot response: {format_hex(raw)}")
+    return PmuSnapshot(
+        clk_hz=int.from_bytes(raw[4:8], "big"),
+        global_cycles=int.from_bytes(raw[8:16], "big"),
+        crypto_active_cycles=int.from_bytes(raw[16:24], "big"),
+        uart_tx_stall_cycles=int.from_bytes(raw[24:32], "big"),
+        stream_credit_block_cycles=int.from_bytes(raw[32:40], "big"),
+        acl_block_events=int.from_bytes(raw[40:48], "big"),
+    )
+
+
+def parse_pmu_clear_ack(raw: bytes) -> PmuClearAck:
+    if len(raw) != 4 or raw[:3] != bytes([0x55, 0x02, 0x4A]):
+        raise ValueError(f"invalid PMU clear ACK: {format_hex(raw)}")
+    return PmuClearAck(status=raw[3])
+
+
+def parse_stream_response(raw: bytes) -> StreamCapabilities | StreamStartAck | StreamCipherResponse | StreamBlockResponse | StreamErrorResponse:
+    if len(raw) < 3 or raw[0] != 0x55:
+        raise ValueError(f"invalid stream frame: {format_hex(raw)}")
+
+    payload_len = raw[1]
+    if len(raw) != payload_len + 2:
+        raise ValueError(f"stream payload length mismatch: {format_hex(raw)}")
+
+    payload = raw[2:]
+    if payload_len == 4 and payload[:1] == b"W":
+        return StreamCapabilities(chunk_size=payload[1], window=payload[2], flags=payload[3])
+    if payload_len == 2 and payload[:1] == b"M":
+        return StreamStartAck(status=payload[1])
+    if payload_len == 130 and payload[:1] == b"R":
+        return StreamCipherResponse(seq=payload[1], ciphertext=payload[2:])
+    if payload_len == 3 and payload[:1] == b"B":
+        return StreamBlockResponse(seq=payload[1], slot=payload[2])
+    if payload_len == 2 and payload[:1] == b"E":
+        return StreamErrorResponse(code=payload[1])
+
+    raise ValueError(f"unsupported stream response: {format_hex(raw)}")
 
 
 def read_exact(ser: serial.Serial, expected_len: int, timeout_s: float) -> bytes:
@@ -440,6 +592,28 @@ def case_acl_write(index: int, key: int, expected: AclWriteAck | None = None) ->
     )
 
 
+def case_query_pmu(expected: PmuSnapshot | None = None) -> ProbeCase:
+    return ProbeCase(
+        name="Query PMU",
+        tx=build_frame(b"P"),
+        response_len=48,
+        expected=expected.as_bytes() if expected else None,
+        description="PMU hardware snapshot readback",
+        kind="pmu_query",
+    )
+
+
+def case_clear_pmu(expected: PmuClearAck | None = None) -> ProbeCase:
+    return ProbeCase(
+        name="Clear PMU",
+        tx=build_frame(b"J"),
+        response_len=4,
+        expected=expected.as_bytes() if expected else None,
+        description="PMU hardware counters clear",
+        kind="pmu_clear",
+    )
+
+
 def case_encrypt_block(algo: str, plaintext: bytes) -> ProbeCase:
     normalized = algo.strip().upper()
     if normalized not in {"AES", "SM4"}:
@@ -476,6 +650,8 @@ def run_case_on_serial(
     rule_stats = None
     acl_write_ack = None
     acl_key_map = None
+    pmu_snapshot = None
+    pmu_clear_ack = None
     passed = False
     if case.kind == "stats":
         try:
@@ -501,6 +677,18 @@ def run_case_on_serial(
             passed = case.expected is None or rx == case.expected
         except ValueError:
             passed = False
+    elif case.kind == "pmu_query":
+        try:
+            pmu_snapshot = parse_pmu_snapshot_response(rx)
+            passed = case.expected is None or rx == case.expected
+        except ValueError:
+            passed = False
+    elif case.kind == "pmu_clear":
+        try:
+            pmu_clear_ack = parse_pmu_clear_ack(rx)
+            passed = case.expected is None or rx == case.expected
+        except ValueError:
+            passed = False
     else:
         passed = case.expected is None or rx == case.expected
 
@@ -513,4 +701,6 @@ def run_case_on_serial(
         rule_stats=rule_stats,
         acl_write_ack=acl_write_ack,
         acl_key_map=acl_key_map,
+        pmu_snapshot=pmu_snapshot,
+        pmu_clear_ack=pmu_clear_ack,
     )
