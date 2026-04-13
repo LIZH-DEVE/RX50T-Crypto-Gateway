@@ -333,21 +333,22 @@ module contest_uart_crypto_probe #(
     reg        acl_frame_algo_q;
     reg        acl_frame_active_q;
     reg        acl_frame_stream_q;
-    reg        acl_stream_drop_q;
     reg        acl_in_valid_q;
     reg  [7:0] acl_in_data_q;
     reg        acl_in_last_q;
-    reg        acl_feed_valid_q;
-    reg  [7:0] acl_feed_data_q;
-    reg        acl_feed_last_q;
-    reg  [7:0] acl_feed_key_q;
+    reg        axis_in_pending_valid_q;
+    reg  [7:0] axis_in_pending_data_q;
+    reg        axis_in_pending_last_q;
+    reg  [0:0] axis_in_pending_user_q;
 
-    wire       acl_valid;
-    wire [7:0] acl_data;
-    wire       acl_last;
-    wire       acl_blocked;
-    wire       acl_block_slot_valid;
-    wire [2:0] acl_block_slot;
+    wire       axis_in_tready_w;
+    wire       axis_out_tvalid_w;
+    wire [7:0] axis_out_tdata_w;
+    wire       axis_out_tlast_w;
+    wire       axis_out_tready_w;
+    wire       axis_acl_block_pulse_w;
+    wire       axis_acl_block_slot_valid_w;
+    wire [2:0] axis_acl_block_slot_w;
     wire       acl_cfg_busy;
     wire       acl_cfg_done;
     wire       acl_cfg_error;
@@ -359,12 +360,10 @@ module contest_uart_crypto_probe #(
     reg  [7:0] acl_cfg_key_q;
     reg  [2:0] pending_cfg_ack_idx_q;
     reg  [7:0] pending_cfg_ack_key_q;
-    reg        bridge_in_valid_q;
-    reg [7:0]  bridge_in_data_q;
-    reg        bridge_in_last_q;
-    reg        bridge_in_algo_q;
     reg        pending_error_q;
     reg        pending_error_nl_q;
+    reg        pending_block_q;
+    reg        pending_block_nl_q;
     reg        pending_cfg_ack_q;
     reg  [1:0] pending_cfg_ack_pos_q;
     reg        pending_stats_q;
@@ -408,16 +407,21 @@ module contest_uart_crypto_probe #(
     reg  [1:0] pmu_tx_kind_q;
     reg  [5:0] pmu_tx_idx_q;
 
-    wire       bridge_valid;
-    wire [7:0] bridge_data;
-    wire       bridge_last;
     wire       pmu_crypto_active_w;
     wire       tx_ready;
     wire       pmu_tx_active_w;
     wire [7:0] pmu_tx_data_w;
     wire       stream_tx_active_w;
     wire [7:0] stream_tx_data_w;
-    wire       bridge_tx_ready_w;
+    reg        ctrl_tx_valid_r;
+    reg  [7:0] ctrl_tx_data_r;
+    reg        ctrl_tx_last_r;
+    wire       ctrl_tx_valid_w;
+    wire [7:0] ctrl_tx_data_w;
+    wire       ctrl_tx_last_w;
+    wire       ctrl_tx_fire_w;
+    wire       axis_in_fire_w;
+    wire       axis_out_fire_w;
     wire       tx_mux_valid_w;
     wire [7:0] tx_mux_data_w;
     wire       pmu_uart_tx_stall_w;
@@ -436,17 +440,29 @@ module contest_uart_crypto_probe #(
                                 );
     assign stream_tx_active_w = (stream_tx_kind_q != STREAM_TX_NONE);
     assign stream_tx_data_w   = stream_tx_byte(stream_tx_kind_q, stream_tx_idx_q, stream_tx_seq_q, stream_tx_slot_q, stream_tx_code_q);
-    assign bridge_tx_ready_w = tx_ready &&
-                               !pmu_tx_active_w &&
-                               !stream_tx_active_w &&
-                               !frame_stream_chunk_q &&
-                               !((stream_payload_bytes_left_q == 8'd0) && (stream_seq_count_q != 4'd0));
+    assign ctrl_tx_valid_w    = ctrl_tx_valid_r;
+    assign ctrl_tx_data_w     = ctrl_tx_data_r;
+    assign ctrl_tx_last_w     = ctrl_tx_last_r;
+    assign ctrl_tx_fire_w     = ctrl_tx_valid_w &&
+                                tx_ready &&
+                                !pmu_tx_active_w &&
+                                !stream_tx_active_w;
+    assign axis_in_fire_w     = axis_in_pending_valid_q && axis_in_tready_w;
+    assign axis_out_tready_w  = tx_ready &&
+                                !pmu_tx_active_w &&
+                                !stream_tx_active_w &&
+                                !ctrl_tx_valid_w &&
+                                !frame_stream_chunk_q &&
+                                (((stream_payload_bytes_left_q != 8'd0) || (stream_seq_count_q == 4'd0)));
+    assign axis_out_fire_w    = axis_out_tvalid_w && axis_out_tready_w;
     assign tx_mux_valid_w    = pmu_tx_active_w ? 1'b1 :
                                (stream_tx_active_w ? 1'b1 :
-                               (bridge_valid && !frame_stream_chunk_q &&
-                                ((stream_payload_bytes_left_q != 8'd0) || (stream_seq_count_q == 4'd0))));
+                               (ctrl_tx_valid_w ? 1'b1 :
+                               (axis_out_tvalid_w && !frame_stream_chunk_q &&
+                                ((stream_payload_bytes_left_q != 8'd0) || (stream_seq_count_q == 4'd0)))));
     assign tx_mux_data_w     = pmu_tx_active_w ? pmu_tx_data_w :
-                               (stream_tx_active_w ? stream_tx_data_w : bridge_data);
+                               (stream_tx_active_w ? stream_tx_data_w :
+                               (ctrl_tx_valid_w ? ctrl_tx_data_w : axis_out_tdata_w));
     assign pmu_uart_tx_stall_w = tx_mux_valid_w && !tx_ready;
     assign pmu_stream_credit_block_w =
         stream_session_active_q &&
@@ -458,6 +474,58 @@ module contest_uart_crypto_probe #(
         !frame_pmu_query_q &&
         !frame_pmu_clear_q &&
         !pmu_tx_active_w;
+
+    always @(*) begin
+        ctrl_tx_valid_r = 1'b0;
+        ctrl_tx_data_r  = 8'h00;
+        ctrl_tx_last_r  = 1'b0;
+
+        if (pending_error_q) begin
+            ctrl_tx_valid_r = 1'b1;
+            ctrl_tx_data_r  = ASCII_ERROR;
+            ctrl_tx_last_r  = 1'b0;
+        end else if (pending_error_nl_q) begin
+            ctrl_tx_valid_r = 1'b1;
+            ctrl_tx_data_r  = ASCII_NL;
+            ctrl_tx_last_r  = 1'b1;
+        end else if (pending_block_q) begin
+            ctrl_tx_valid_r = 1'b1;
+            ctrl_tx_data_r  = 8'h44;
+            ctrl_tx_last_r  = 1'b0;
+        end else if (pending_block_nl_q) begin
+            ctrl_tx_valid_r = 1'b1;
+            ctrl_tx_data_r  = ASCII_NL;
+            ctrl_tx_last_r  = 1'b1;
+        end else if (pending_cfg_ack_q) begin
+            ctrl_tx_valid_r = 1'b1;
+            case (pending_cfg_ack_pos_q)
+                2'd0: ctrl_tx_data_r = ASCII_CFG_ACK;
+                2'd1: ctrl_tx_data_r = {5'd0, pending_cfg_ack_idx_q};
+                2'd2: ctrl_tx_data_r = pending_cfg_ack_key_q;
+                default: ctrl_tx_data_r = ASCII_NL;
+            endcase
+            ctrl_tx_last_r = (pending_cfg_ack_pos_q == 2'd3);
+        end else if (pending_keymap_q) begin
+            ctrl_tx_valid_r = 1'b1;
+            ctrl_tx_data_r  = flat_keymap_byte(pending_keymap_idx_q, acl_rule_keys_flat);
+            ctrl_tx_last_r  = (pending_keymap_idx_q == 4'd9);
+        end else if (pending_rule_stats_q) begin
+            ctrl_tx_valid_r = 1'b1;
+            ctrl_tx_data_r  = flat_rule_byte(pending_rule_stats_idx_q, acl_rule_counts_flat);
+            ctrl_tx_last_r  = (pending_rule_stats_idx_q == 4'd9);
+        end else if (pending_stats_q) begin
+            ctrl_tx_valid_r = 1'b1;
+            ctrl_tx_data_r  = stats_byte(
+                                pending_stats_idx_q,
+                                stat_total_frames_q,
+                                stat_acl_blocks_q,
+                                stat_aes_frames_q,
+                                stat_sm4_frames_q,
+                                stat_error_frames_q
+                              );
+            ctrl_tx_last_r  = (pending_stats_idx_q == 3'd6);
+        end
+    end
 
     contest_uart_rx #(
         .CLK_HZ(CLK_HZ),
@@ -490,41 +558,30 @@ module contest_uart_crypto_probe #(
         .o_payload_count(parser_payload_count)
     );
 
-    contest_acl_core u_acl (
-        .clk                 (i_clk),
-        .rst_n               (i_rst_n),
-        .parser_valid        (acl_feed_valid_q),
-        .parser_match_key    (acl_feed_key_q),
-        .parser_payload      (acl_feed_data_q),
-        .parser_last         (acl_feed_last_q),
-        .cfg_valid           (acl_cfg_valid_q),
-        .cfg_index           (acl_cfg_index_q),
-        .cfg_key             (acl_cfg_key_q),
-        .acl_valid           (acl_valid),
-        .acl_data            (acl_data),
-        .acl_last            (acl_last),
-        .acl_blocked         (acl_blocked),
-        .acl_block_slot_valid(acl_block_slot_valid),
-        .acl_block_slot      (acl_block_slot),
-        .cfg_busy            (acl_cfg_busy),
-        .cfg_done            (acl_cfg_done),
-        .cfg_error           (acl_cfg_error),
-        .o_rule_keys_flat    (acl_rule_keys_flat),
-        .o_rule_counts_flat  (acl_rule_counts_flat)
-    );
-
-    contest_crypto_bridge u_bridge (
-        .clk          (i_clk),
-        .rst_n        (i_rst_n),
-        .acl_valid    (bridge_in_valid_q),
-        .acl_data     (bridge_in_data_q),
-        .acl_last     (bridge_in_last_q),
-        .i_algo_sel   (bridge_in_algo_q),
-        .uart_tx_ready(bridge_tx_ready_w),
-        .o_pmu_crypto_active(pmu_crypto_active_w),
-        .bridge_valid (bridge_valid),
-        .bridge_data  (bridge_data),
-        .bridge_last  (bridge_last)
+    contest_crypto_axis_core u_axis_core (
+        .i_clk                 (i_clk),
+        .i_rst_n               (i_rst_n),
+        .s_axis_tvalid         (axis_in_pending_valid_q),
+        .s_axis_tready         (axis_in_tready_w),
+        .s_axis_tdata          (axis_in_pending_data_q),
+        .s_axis_tlast          (axis_in_pending_last_q),
+        .s_axis_tuser          (axis_in_pending_user_q),
+        .m_axis_tvalid         (axis_out_tvalid_w),
+        .m_axis_tready         (axis_out_tready_w),
+        .m_axis_tdata          (axis_out_tdata_w),
+        .m_axis_tlast          (axis_out_tlast_w),
+        .i_acl_cfg_valid       (acl_cfg_valid_q),
+        .i_acl_cfg_index       (acl_cfg_index_q),
+        .i_acl_cfg_key         (acl_cfg_key_q),
+        .o_acl_cfg_busy        (acl_cfg_busy),
+        .o_acl_cfg_done        (acl_cfg_done),
+        .o_acl_cfg_error       (acl_cfg_error),
+        .o_rule_keys_flat      (acl_rule_keys_flat),
+        .o_rule_counts_flat    (acl_rule_counts_flat),
+        .o_acl_block_pulse     (axis_acl_block_pulse_w),
+        .o_acl_block_slot_valid(axis_acl_block_slot_valid_w),
+        .o_acl_block_slot      (axis_acl_block_slot_w),
+        .o_pmu_crypto_active   (pmu_crypto_active_w)
     );
 
     contest_uart_tx #(
@@ -541,15 +598,21 @@ module contest_uart_crypto_probe #(
 
     always @(posedge i_clk) begin
         if (!i_rst_n) begin
-            acl_feed_valid_q <= 1'b0;
-            acl_feed_data_q  <= 8'd0;
-            acl_feed_last_q  <= 1'b0;
-            acl_feed_key_q   <= 8'd0;
+            axis_in_pending_valid_q <= 1'b0;
+            axis_in_pending_data_q  <= 8'd0;
+            axis_in_pending_last_q  <= 1'b0;
+            axis_in_pending_user_q  <= 1'b0;
         end else begin
-            acl_feed_valid_q <= acl_in_valid_q;
-            acl_feed_data_q  <= acl_in_data_q;
-            acl_feed_last_q  <= acl_in_last_q;
-            acl_feed_key_q   <= frame_key_valid_q ? frame_key_q : acl_in_data_q;
+            if (axis_in_fire_w) begin
+                axis_in_pending_valid_q <= 1'b0;
+            end
+
+            if (acl_in_valid_q) begin
+                axis_in_pending_valid_q <= 1'b1;
+                axis_in_pending_data_q  <= acl_in_data_q;
+                axis_in_pending_last_q  <= acl_in_last_q;
+                axis_in_pending_user_q  <= acl_frame_algo_q;
+            end
         end
     end
 
@@ -582,7 +645,6 @@ module contest_uart_crypto_probe #(
             acl_frame_algo_q          <= ALG_SM4;
             acl_frame_active_q        <= 1'b0;
             acl_frame_stream_q        <= 1'b0;
-            acl_stream_drop_q         <= 1'b0;
             acl_in_valid_q            <= 1'b0;
             acl_in_data_q             <= 8'd0;
             acl_in_last_q             <= 1'b0;
@@ -591,12 +653,10 @@ module contest_uart_crypto_probe #(
             acl_cfg_key_q             <= 8'd0;
             pending_cfg_ack_idx_q     <= 3'd0;
             pending_cfg_ack_key_q     <= 8'd0;
-            bridge_in_valid_q         <= 1'b0;
-            bridge_in_data_q          <= 8'd0;
-            bridge_in_last_q          <= 1'b0;
-            bridge_in_algo_q          <= ALG_SM4;
             pending_error_q           <= 1'b0;
             pending_error_nl_q        <= 1'b0;
+            pending_block_q           <= 1'b0;
+            pending_block_nl_q        <= 1'b0;
             pending_cfg_ack_q         <= 1'b0;
             pending_cfg_ack_pos_q     <= 2'd0;
             pending_stats_q           <= 1'b0;
@@ -645,10 +705,6 @@ module contest_uart_crypto_probe #(
             acl_cfg_valid_q   <= 1'b0;
             acl_cfg_index_q   <= 3'd0;
             acl_cfg_key_q     <= 8'd0;
-            bridge_in_valid_q <= 1'b0;
-            bridge_in_data_q  <= 8'd0;
-            bridge_in_last_q  <= 1'b0;
-            bridge_in_algo_q  <= ALG_SM4;
 
             if (pmu_count_enable_w) begin
                 pmu_global_cycles_q <= pmu_global_cycles_q + 64'd1;
@@ -684,7 +740,7 @@ module contest_uart_crypto_probe #(
             if (!stream_tx_active_w &&
                 (stream_payload_bytes_left_q == 8'd0) &&
                 (stream_seq_count_q != 4'd0) &&
-                bridge_valid &&
+                axis_out_tvalid_w &&
                 !frame_stream_chunk_q) begin
                 stream_tx_kind_q          <= STREAM_TX_CIPHER_HDR;
                 stream_tx_idx_q           <= 3'd0;
@@ -693,9 +749,7 @@ module contest_uart_crypto_probe #(
                 stream_seq_count_q        <= stream_seq_count_q - 4'd1;
                 stream_payload_bytes_left_q <= 8'd128;
             end else if (!stream_tx_active_w &&
-                         tx_ready &&
-                         bridge_valid &&
-                         !frame_stream_chunk_q &&
+                         axis_out_fire_w &&
                          (stream_payload_bytes_left_q != 8'd0)) begin
                 stream_payload_bytes_left_q <= stream_payload_bytes_left_q - 8'd1;
             end
@@ -1027,22 +1081,22 @@ module contest_uart_crypto_probe #(
                 acl_block_seen_q          <= 1'b0;
             end
 
-            if (acl_blocked) begin
+            if (axis_acl_block_pulse_w) begin
                 acl_block_seen_q <= 1'b1;
                 if (acl_frame_stream_q) begin
                     frame_stream_block_q      <= 1'b1;
-                    frame_stream_block_slot_q <= acl_block_slot_valid ? acl_block_slot : 3'd0;
-                    acl_stream_drop_q         <= 1'b1;
+                    frame_stream_block_slot_q <= axis_acl_block_slot_valid_w ? axis_acl_block_slot_w : 3'd0;
                     stream_session_active_q   <= 1'b0;
                     stream_expected_valid_q   <= 1'b0;
+                end else begin
+                    pending_block_q <= 1'b1;
                 end
             end
 
-            if (acl_valid && acl_last) begin
+            if (axis_in_fire_w && axis_in_pending_last_q) begin
                 acl_frame_active_q <= 1'b0;
                 acl_frame_algo_q   <= ALG_SM4;
                 acl_frame_stream_q <= 1'b0;
-                acl_stream_drop_q  <= 1'b0;
             end
 
             if (acl_cfg_done) begin
@@ -1053,80 +1107,46 @@ module contest_uart_crypto_probe #(
                 stat_error_frames_q <= stat_error_frames_q + 8'd1;
             end
 
-            if (pending_error_q) begin
-                bridge_in_valid_q  <= 1'b1;
-                bridge_in_data_q   <= ASCII_ERROR;
-                bridge_in_last_q   <= 1'b0;
-                bridge_in_algo_q   <= ALG_SM4;
-                pending_error_q    <= 1'b0;
-                pending_error_nl_q <= 1'b1;
-            end else if (pending_error_nl_q) begin
-                bridge_in_valid_q  <= 1'b1;
-                bridge_in_data_q   <= ASCII_NL;
-                bridge_in_last_q   <= 1'b1;
-                bridge_in_algo_q   <= ALG_SM4;
-                pending_error_nl_q <= 1'b0;
-            end else if (pending_cfg_ack_q) begin
-                bridge_in_valid_q <= 1'b1;
-                bridge_in_algo_q  <= ALG_SM4;
-                case (pending_cfg_ack_pos_q)
-                    2'd0: bridge_in_data_q <= ASCII_CFG_ACK;
-                    2'd1: bridge_in_data_q <= {5'd0, pending_cfg_ack_idx_q};
-                    2'd2: bridge_in_data_q <= pending_cfg_ack_key_q;
-                    default: bridge_in_data_q <= ASCII_NL;
-                endcase
-                bridge_in_last_q <= (pending_cfg_ack_pos_q == 2'd3);
-                if (pending_cfg_ack_pos_q == 2'd3) begin
-                    pending_cfg_ack_q     <= 1'b0;
-                    pending_cfg_ack_pos_q <= 2'd0;
-                end else begin
-                    pending_cfg_ack_pos_q <= pending_cfg_ack_pos_q + 2'd1;
+            if (ctrl_tx_fire_w) begin
+                if (pending_error_q) begin
+                    pending_error_q    <= 1'b0;
+                    pending_error_nl_q <= 1'b1;
+                end else if (pending_error_nl_q) begin
+                    pending_error_nl_q <= 1'b0;
+                end else if (pending_block_q) begin
+                    pending_block_q    <= 1'b0;
+                    pending_block_nl_q <= 1'b1;
+                end else if (pending_block_nl_q) begin
+                    pending_block_nl_q <= 1'b0;
+                end else if (pending_cfg_ack_q) begin
+                    if (pending_cfg_ack_pos_q == 2'd3) begin
+                        pending_cfg_ack_q     <= 1'b0;
+                        pending_cfg_ack_pos_q <= 2'd0;
+                    end else begin
+                        pending_cfg_ack_pos_q <= pending_cfg_ack_pos_q + 2'd1;
+                    end
+                end else if (pending_keymap_q) begin
+                    if (pending_keymap_idx_q == 4'd9) begin
+                        pending_keymap_q     <= 1'b0;
+                        pending_keymap_idx_q <= 4'd0;
+                    end else begin
+                        pending_keymap_idx_q <= pending_keymap_idx_q + 4'd1;
+                    end
+                end else if (pending_rule_stats_q) begin
+                    if (pending_rule_stats_idx_q == 4'd9) begin
+                        pending_rule_stats_q     <= 1'b0;
+                        pending_rule_stats_idx_q <= 4'd0;
+                    end else begin
+                        pending_rule_stats_idx_q <= pending_rule_stats_idx_q + 4'd1;
+                    end
+                end else if (pending_stats_q) begin
+                    if (pending_stats_idx_q == 3'd6) begin
+                        pending_stats_q     <= 1'b0;
+                        pending_stats_idx_q <= 3'd0;
+                    end else begin
+                        pending_stats_idx_q <= pending_stats_idx_q + 3'd1;
+                    end
                 end
-            end else if (pending_keymap_q) begin
-                bridge_in_valid_q <= 1'b1;
-                bridge_in_data_q  <= flat_keymap_byte(pending_keymap_idx_q, acl_rule_keys_flat);
-                bridge_in_last_q  <= (pending_keymap_idx_q == 4'd9);
-                bridge_in_algo_q  <= ALG_SM4;
-                if (pending_keymap_idx_q == 4'd9) begin
-                    pending_keymap_q     <= 1'b0;
-                    pending_keymap_idx_q <= 4'd0;
-                end else begin
-                    pending_keymap_idx_q <= pending_keymap_idx_q + 4'd1;
-                end
-            end else if (pending_rule_stats_q) begin
-                bridge_in_valid_q <= 1'b1;
-                bridge_in_data_q  <= flat_rule_byte(pending_rule_stats_idx_q, acl_rule_counts_flat);
-                bridge_in_last_q  <= (pending_rule_stats_idx_q == 4'd9);
-                bridge_in_algo_q  <= ALG_SM4;
-                if (pending_rule_stats_idx_q == 4'd9) begin
-                    pending_rule_stats_q     <= 1'b0;
-                    pending_rule_stats_idx_q <= 4'd0;
-                end else begin
-                    pending_rule_stats_idx_q <= pending_rule_stats_idx_q + 4'd1;
-                end
-            end else if (pending_stats_q) begin
-                bridge_in_valid_q <= 1'b1;
-                bridge_in_data_q  <= stats_byte(
-                    pending_stats_idx_q,
-                    stat_total_frames_q,
-                    stat_acl_blocks_q,
-                    stat_aes_frames_q,
-                    stat_sm4_frames_q,
-                    stat_error_frames_q
-                );
-                bridge_in_last_q <= (pending_stats_idx_q == 3'd6);
-                bridge_in_algo_q <= ALG_SM4;
-                if (pending_stats_idx_q == 3'd6) begin
-                    pending_stats_q     <= 1'b0;
-                    pending_stats_idx_q <= 3'd0;
-                end else begin
-                    pending_stats_idx_q <= pending_stats_idx_q + 3'd1;
-                end
-            end else if (acl_valid && !(acl_stream_drop_q || (acl_blocked && acl_frame_stream_q))) begin
-                bridge_in_valid_q <= 1'b1;
-                bridge_in_data_q  <= acl_data;
-                bridge_in_last_q  <= acl_last;
-                bridge_in_algo_q  <= acl_frame_algo_q;
             end
         end
     end

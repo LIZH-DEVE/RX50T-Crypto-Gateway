@@ -343,6 +343,75 @@ class GatewayWorkerTests(unittest.TestCase):
         self.assertAlmostEqual(events[-1].payload["crypto_utilization"], 0.15)
         self.assertEqual(events[-1].payload["acl_block_events"], 0)
 
+    def test_handle_encrypt_file_retries_pmu_query_after_stream_acl_block(self) -> None:
+        worker = worker_mod.GatewayWorker()
+        fake_serial = mock.Mock()
+        worker._serial = fake_serial
+        worker._connected_port = "COM12"
+        worker._connected_baud = 2_000_000
+
+        mock_input_path = mock.Mock()
+        mock_input_path.read_bytes.return_value = b"A" * 128
+        mock_input_path.name = "blocked.bin"
+        mock_input_path.__str__ = mock.Mock(return_value="blocked.bin")
+
+        pmu_snapshot = PmuSnapshot(
+            clk_hz=50_000_000,
+            global_cycles=5000,
+            crypto_active_cycles=0,
+            uart_tx_stall_cycles=250,
+            stream_credit_block_cycles=0,
+            acl_block_events=1,
+        )
+
+        def fake_run_case(ser, case, timeout_s):
+            if case.kind == "pmu_clear":
+                return ProbeResult(
+                    case=case,
+                    rx=bytes([0x55, 0x02, 0x4A, 0x00]),
+                    passed=True,
+                    duration_s=0.001,
+                    pmu_clear_ack=PmuClearAck(status=0),
+                )
+            if case.kind == "pmu_query":
+                fake_run_case.pmu_queries += 1
+                if fake_run_case.pmu_queries == 1:
+                    return ProbeResult(
+                        case=case,
+                        rx=bytes([0x55, 0x02, 0x45, 0x02]),
+                        passed=False,
+                    )
+                return ProbeResult(
+                    case=case,
+                    rx=pmu_snapshot.as_bytes(),
+                    passed=True,
+                    duration_s=0.001,
+                    pmu_snapshot=pmu_snapshot,
+                )
+            raise AssertionError(f"unexpected probe kind: {case.kind}")
+
+        fake_run_case.pmu_queries = 0
+
+        with mock.patch.object(worker_mod, "Path", return_value=mock_input_path):
+            with mock.patch.object(worker_mod, "run_case_on_serial", side_effect=fake_run_case):
+                with mock.patch.object(
+                    worker_mod,
+                    "stream_encrypt_file_v3_on_serial",
+                    side_effect=RuntimeError("ACL blocked stream chunk seq=0x00 slot=5"),
+                ):
+                    with mock.patch.object(worker_mod.time, "sleep") as sleep_mock:
+                        with self.assertRaisesRegex(RuntimeError, "ACL blocked stream chunk"):
+                            worker._handle_encrypt_file("blocked.bin", "SM4", 3.0)
+
+        self.assertEqual(fake_run_case.pmu_queries, 2)
+        self.assertTrue(sleep_mock.called)
+        events = worker.poll_events(8)
+        self.assertEqual(
+            [event.kind for event in events],
+            ["pmu_cleared", "file_begin", "pmu_snapshot"],
+        )
+        self.assertEqual(events[-1].payload["acl_block_events"], 1)
+
     def test_stream_encrypt_file_v3_on_serial_times_out_when_rx_stalls(self) -> None:
         def on_write(fake_serial: FakeStreamSerial, data: bytes) -> None:
             if data == bytes([0x55, 0x01, 0x57]):

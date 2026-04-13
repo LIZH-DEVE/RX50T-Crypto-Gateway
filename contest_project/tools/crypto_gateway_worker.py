@@ -471,10 +471,25 @@ class GatewayWorker:
         )
 
     def _query_pmu_after_session(self, ser: serial.Serial, timeout_s: float) -> None:
-        result = run_case_on_serial(ser, case_query_pmu(), timeout_s)
-        if result.pmu_snapshot is None:
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                result = run_case_on_serial(ser, case_query_pmu(), timeout_s)
+            except Exception as exc:
+                last_error = exc
+            else:
+                if result.pmu_snapshot is not None:
+                    self._emit_pmu_snapshot(result)
+                    return
+                last_error = RuntimeError("invalid PMU snapshot response")
+
+            if attempt < 2:
+                _reset_serial_buffers(ser)
+                time.sleep(0.05)
+
+        if last_error is None:
             raise RuntimeError("invalid PMU snapshot response")
-        self._emit_pmu_snapshot(result)
+        raise last_error
 
     def _clear_pmu_before_session(self, ser: serial.Serial, timeout_s: float) -> None:
         result = run_case_on_serial(ser, case_clear_pmu(), timeout_s)

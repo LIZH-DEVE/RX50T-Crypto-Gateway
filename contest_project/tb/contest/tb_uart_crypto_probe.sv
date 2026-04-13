@@ -121,18 +121,16 @@ module tb_uart_crypto_probe;
             end
             if (sample !== expected) begin
                 $fatal(1,
-                       "UART output mismatch. expected=0x%02x actual=0x%02x active_algo=%0b frame_algo=%0b crypto_block=%032h tx_shift=%032h tx_count=%0d acl_in_valid=%0b acl_in_data=0x%02x acl_valid=%0b acl_data=0x%02x parser_len=%0d proto_err=%0b",
+                       "UART output mismatch. expected=0x%02x actual=0x%02x active_algo=%0b frame_algo=%0b crypto_block=%032h out_valid=%0b out_data=0x%02x pending_valid=%0b pending_data=0x%02x parser_len=%0d proto_err=%0b",
                        expected,
                        sample,
-                       dut.u_probe.u_bridge.active_algo_q,
+                       dut.u_probe.u_axis_core.u_block_engine.active_algo_q,
                        dut.u_probe.frame_algo_sel_q,
-                       dut.u_probe.u_bridge.crypto_block_q,
-                       dut.u_probe.u_bridge.tx_shift_q,
-                       dut.u_probe.u_bridge.tx_count_q,
-                       dut.u_probe.acl_in_valid_q,
-                       dut.u_probe.acl_in_data_q,
-                       dut.u_probe.acl_valid,
-                       dut.u_probe.acl_data,
+                       dut.u_probe.u_axis_core.u_block_engine.crypto_block_q,
+                       dut.u_probe.axis_out_tvalid_w,
+                       dut.u_probe.axis_out_tdata_w,
+                       dut.u_probe.axis_in_pending_valid_q,
+                       dut.u_probe.axis_in_pending_data_q,
                        dut.u_probe.parser_payload_len,
                        dut.u_probe.frame_proto_error_q);
             end
