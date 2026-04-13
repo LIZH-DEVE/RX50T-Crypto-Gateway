@@ -47,7 +47,7 @@ Close `PMU v1.1` end-to-end:
 - `python -m pytest ...test_crypto_gateway_protocol.py -q`
   - `38 passed`
 - `python -m pytest ...test_crypto_gateway_worker.py -q`
-  - `10 passed`
+  - `11 passed`
 - `python -m pytest ...test_rx50t_crypto_gui_layout.py -q`
   - `5 passed`
 

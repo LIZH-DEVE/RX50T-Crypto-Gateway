@@ -4,7 +4,7 @@
 
 The currently validated line is:
 
-`UART @ 2,000,000 baud -> parser -> 8-slot BRAM-backed runtime ACL -> BRAM-backed AES/SM4 block-stream engine -> UART`
+`UART @ 2,000,000 baud -> parser -> protocol dispatcher -> contest_crypto_axis_core (ACL AXIS + packer + crypto block engine + unpacker) -> UART`
 
 The project deliberately avoids:
 - `ARM/PS`
@@ -21,6 +21,7 @@ The board is used for the hard real-time path only:
 ## Current Status
 
 Fresh validated baseline:
+- AXIS v1.1 mainline datapath through `contest_crypto_axis_core`
 - board-side `2,000,000 baud` UART datapath
 - `AES-128` and `SM4-128`
 - `16B / 32B / 64B / 128B` block encryption
@@ -162,17 +163,24 @@ py -3 .\contest_project\tools\rx50t_crypto_gui.py
 ## Latest Verified Results
 
 Latest build and board-tested tag:
-- `pmu-v1.1-stream-2mbaud-20260413`
+- `axis-v1.1-board-baseline-20260413`
 
 Fresh build result:
 - bitstream:
   - `contest_project/build/rx50t_uart_crypto_probe/rx50t_uart_crypto_probe.runs/impl_1/rx50t_uart_crypto_probe_board_top.bit`
-- `impl WNS = 5.888ns`
-- `impl WHS = 0.035ns`
-- `Slice LUTs = 3969 (12.17%)`
-- `Slice Registers = 5628 (8.63%)`
+- `synth WNS = 8.603ns`
+- `synth WHS = 0.058ns`
+- `impl WNS = 6.392ns`
+- `impl WHS = 0.034ns`
+- `Slice LUTs = 3794 (11.64%)`
+- `Slice Registers = 5449 (8.36%)`
 - `Block RAM Tile = 4.5 (6.00%)`
 - `DSP = 0`
+
+Fresh RTL verification:
+- `tb_contest_crypto_axis_core`: pass
+- `tb_uart_crypto_probe`: pass
+- `tb_uart_crypto_probe_stream_v3`: pass
 
 Fresh CLI smoke on the programmed board:
 - `--query-stats`: pass
@@ -185,26 +193,18 @@ Fresh CLI smoke on the programmed board:
 
 Fresh GUI worker run on the real board with `512KB` file traffic:
 - `SM4`
-  - PMU snapshot:
-    - `global=266580316`
-    - `crypto_active=655360`
-    - `uart_tx_stall=134287671`
-    - `credit_block=0`
-    - `acl_events=0`
+  - file result:
+    - `512KB in 5.331s @ 0.787 Mbps`
   - derived ratios:
     - `HW Util = 0.25%`
-    - `UART Stall = 50.36%`
+    - `UART Stall = 50.55%`
     - `Credit Block = 0.00%`
 - `AES`
-  - PMU snapshot:
-    - `global=266598814`
-    - `crypto_active=1835008`
-    - `uart_tx_stall=134284215`
-    - `credit_block=0`
-    - `acl_events=0`
+  - file result:
+    - `512KB in 5.331s @ 0.787 Mbps`
   - derived ratios:
     - `HW Util = 0.69%`
-    - `UART Stall = 50.37%`
+    - `UART Stall = 50.55%`
     - `Credit Block = 0.00%`
 
 Interpretation of the latest PMU evidence:
@@ -216,6 +216,7 @@ Fresh ACL runtime path verification:
 - GUI `Deploy Threat Signature`: verified
 - live key-map readback on connect: verified
 - ACL block flash in threat array: verified
+- worker PMU retry after ACL block residual stream error: verified
 - PMU snapshot after ACL event:
   - `global=16096984`
   - `crypto_active=0`
@@ -226,6 +227,7 @@ Fresh ACL runtime path verification:
 ## Documentation Entry Points
 
 - [Daily progress index](./daily-progress/README.md)
+- [Code analysis report](./docs/CODE_ANALYSIS_REPORT.md)
 - [Current baseline](./docs/RX50T_CURRENT_BASELINE.md)
 - [Architecture overview](./docs/RX50T_ARCHITECTURE_OVERVIEW.md)
 - [P1 demo runbook](./docs/RX50T_P1_DEMO_RUNBOOK.md)

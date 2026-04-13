@@ -26,14 +26,12 @@ add_files -norecurse {
     D:/FPGAhanjia/jichuangsai/contest_project/rtl/contest/contest_uart_rx.sv
     D:/FPGAhanjia/jichuangsai/contest_project/rtl/contest/contest_uart_tx.sv
     D:/FPGAhanjia/jichuangsai/contest_project/rtl/contest/contest_parser_core.sv
-    D:/FPGAhanjia/jichuangsai/contest_project/rtl/contest/contest_acl_core.sv
     D:/FPGAhanjia/jichuangsai/contest_project/rtl/contest/contest_block_fifo.sv
     D:/FPGAhanjia/jichuangsai/contest_project/rtl/contest/contest_acl_axis_core.sv
     D:/FPGAhanjia/jichuangsai/contest_project/rtl/contest/contest_axis_block_packer.sv
     D:/FPGAhanjia/jichuangsai/contest_project/rtl/contest/contest_axis_block_unpacker.sv
     D:/FPGAhanjia/jichuangsai/contest_project/rtl/contest/contest_crypto_block_engine.sv
     D:/FPGAhanjia/jichuangsai/contest_project/rtl/contest/contest_crypto_axis_core.sv
-    D:/FPGAhanjia/jichuangsai/contest_project/rtl/contest/contest_crypto_bridge.sv
     D:/FPGAhanjia/jichuangsai/contest_project/rtl/contest/contest_uart_crypto_probe.sv
     D:/FPGAhanjia/jichuangsai/contest_project/rtl/contest/rx50t_uart_crypto_probe_top.sv
     D:/FPGAhanjia/jichuangsai/contest_project/rtl/contest/rx50t_uart_crypto_probe_board_top.sv
