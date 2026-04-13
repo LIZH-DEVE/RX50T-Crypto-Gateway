@@ -2,263 +2,247 @@
 
 `RX50T Crypto Gateway` is a pure-`PL` security datapath prototype for the `RX50T` board.
 
-The current validated mainline is:
+The currently validated line is:
 
-`UART -> Parser -> 8-rule BRAM-backed ACL -> BRAM-backed block-stream AES/SM4 (16B/32B/64B/128B) -> UART + Stats Query + Rule-Stats Query`
+`UART @ 2,000,000 baud -> parser -> 8-slot BRAM-backed runtime ACL -> BRAM-backed AES/SM4 block-stream engine -> UART`
 
-This repository intentionally does not depend on:
+The project deliberately avoids:
 - `ARM/PS`
 - `DMA/DDR/PBM`
-- a full `Ethernet/IP/UDP` stack
+- full `Ethernet/IP/UDP`
 
-The goal is to keep the board focused on the hard real-time work:
+The board is used for the hard real-time path only:
 - frame parsing
-- hardware ACL blocking
-- AES/SM4 block encryption
-- lightweight observability through stats counters
-
-The current system direction is:
-- board-side pure `PL` datapath
-- PC-side GUI as the instrument panel for demo, monitoring, and batch testing
-- the GUI exposes the compiled ACL rule table carried by the current bitstream
-- the GUI can query board-side per-rule ACL counters and highlight the current hot rule
-- the GUI file-encryption path now slices oversize files into `128B` ping-pong chunks and pads the final short chunk with `PKCS#7`
-
-The GUI MVP has already completed its first real-board walkthrough against the live `RX50T` board.
-Its quick-action panel now exposes `AES/SM4` vectors at `16B / 32B / 64B / 128B`.
+- ACL blocking
+- runtime ACL rule rewrite
+- AES/SM4 encryption
+- hardware-side observability through counters and PMU snapshots
 
 ## Current Status
 
-The current multiblock baseline is complete and has fresh real-board evidence.
-
-Implemented:
-- BRAM-backed ACL rule table
-- current default ACL entries: `X / Y / Z / W / P / R / T / U`
+Fresh validated baseline:
+- board-side `2,000,000 baud` UART datapath
 - `AES-128` and `SM4-128`
-- block-stream bridge with BRAM ingress/egress FIFOs
-- single-block (`16B`), two-block (`32B`), four-block (`64B`), and eight-block (`128B`) encryption
-- protocol error fallback `E\n`
-- ACL block fallback `D\n`
-- stats query command `55 01 3F`
-- per-rule ACL counter query command `55 01 48`
-- five `8-bit` counters:
-  - `total`
-  - `acl`
-  - `aes`
-  - `sm4`
-  - `err`
-- eight `8-bit` board-side ACL rule counters:
-  - `X`
-  - `Y`
-  - `Z`
-  - `W`
-  - `P`
-  - `R`
-  - `T`
-  - `U`
+- `16B / 32B / 64B / 128B` block encryption
+- `128B` streaming file path on the board and in the GUI worker
+- `8` runtime ACL slots backed by BRAM
+- ACL hot update without reboot through control frames
+- ACL key-map readback
+- per-slot ACL hit counters
+- PMU v1.1 hardware snapshot and clear path
 
-Board baseline:
+Current host-side capabilities:
+- CLI probe tool for vectors, stats, ACL, and PMU
+- Tkinter GUI for:
+  - live connect / disconnect
+  - AES/SM4 demo vectors
+  - runtime file encryption
+  - live ACL key-map readback
+  - `Deploy Threat Signature`
+  - PMU panel with `HW Util / UART Stall / Credit Block / ACL Events`
+
+Current default ACL bytes:
+- slot `0`: `X`
+- slot `1`: `Y`
+- slot `2`: `Z`
+- slot `3`: `W`
+- slot `4`: `P`
+- slot `5`: `R`
+- slot `6`: `T`
+- slot `7`: `U`
+
+Runtime ACL constraints:
+- rule width is `1 byte`
+- updates are `volatile only`
+- duplicate rule bytes are rejected
+- rewriting a slot resets that slot's hit counter
+
+## Board Baseline
+
 - board: `RX50T`
 - serial port: `COM12`
-- UART: `115200 8N1`
+- UART: `2,000,000 8N1`
 - clock: `Y18 / 50MHz`
 - UART pins: `K1 (RX) / J1 (TX)`
 - reset key: `J20`
+- FTDI latency timer used during the latest board run: `1 ms`
+
+## Control and Data Plane
+
+Data plane:
+- `UART -> parser -> ACL -> AES/SM4 -> UART`
+
+Control plane:
+- stats query
+- ACL rule-hit query
+- ACL key-map query
+- ACL slot rewrite
+- PMU snapshot query
+- PMU clear
+
+The current PMU v1.1 counters are:
+- `global_cycles`
+- `crypto_active_cycles`
+- `uart_tx_stall_cycles`
+- `stream_credit_block_cycles`
+- `acl_block_events`
+
+## Protocol Quick Reference
+
+All commands keep the existing frame wrapper:
+
+`55 LEN PAYLOAD`
+
+Current commands:
+- stats query:
+  - `55 01 3F`
+  - response: `53 total acl aes sm4 err 0A`
+- rule-hit query:
+  - `55 01 48`
+  - response: `48 c0 c1 c2 c3 c4 c5 c6 c7 0A`
+- ACL key-map query:
+  - `55 01 4B`
+  - response: `4B key0 key1 key2 key3 key4 key5 key6 key7 0A`
+- ACL write:
+  - `55 03 03 idx key`
+  - response: `43 idx key 0A`
+  - reject: `45 0A`
+- PMU query:
+  - `55 01 50`
+  - response:
+    - `55 2E 50 01 clk_hz_be32 global_be64 crypto_active_be64 uart_tx_stall_be64 credit_block_be64 acl_block_events_be64`
+- PMU clear:
+  - `55 01 4A`
+  - response: `55 02 4A 00`
 
 ## Repository Layout
 
 - `contest_project/rtl/contest/`
-  - current pure-`PL` RTL
+  - pure-`PL` RTL
 - `contest_project/tb/contest/`
   - simulation testbenches
 - `contest_project/tools/`
-  - host-side UART test tools
+  - host UART probe CLI
   - shared host protocol layer
-  - Tkinter GUI MVP
+  - worker
+  - Tkinter GUI
 - `contest_project/scripts/`
   - Vivado build scripts
 - `contest_project/constraints/`
   - board constraints
-- `reference/`
-  - extracted reference crypto code from the original large project
 - `docs/`
-  - architecture notes, current baseline, board test docs, demo runbook
+  - architecture notes, baseline notes, runbooks
 - `daily-progress/`
   - day-by-day progress logs
 
-## Documentation Entry Points
+## Quick Start
 
-- [Current baseline](./docs/RX50T_CURRENT_BASELINE.md)
-- [Architecture overview](./docs/RX50T_ARCHITECTURE_OVERVIEW.md)
-- [P1 demo runbook](./docs/RX50T_P1_DEMO_RUNBOOK.md)
-- [Daily progress index](./daily-progress/README.md)
-- GUI entry:
-  - `py -3 .\contest_project\tools\rx50t_crypto_gui.py`
-
-## Implemented Capability
-
-- `UART Echo`
-- `UART -> Parser -> UART`
-- `UART -> Parser -> ACL -> UART`
-- `UART -> Parser -> ACL -> SM4 -> UART`
-- `UART -> Parser -> ACL -> AES/SM4 -> UART`
-- `UART -> Parser -> 4-rule ACL -> AES/SM4 -> UART + Stats Query`
-- `UART -> Parser -> 8-rule BRAM-backed ACL -> BRAM-backed block-stream AES/SM4 (16B/32B/64B/128B) -> UART + Stats Query + Rule-Stats Query`
-
-## Explicitly Out of Scope
-
-- dynamic key download
-- `CBC`
-- payloads longer than `128B`
-- `DMA / DDR / PBM`
-- `ARM/PS`
-- full `Ethernet/IP/UDP` protocol processing
-
-## Quick Demo
-
-Program the current block-stream bitstream, then run:
+Build bitstream:
 
 ```powershell
-py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --query-stats --expect-stats 0,0,0,0,0
-py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --query-rule-stats --expect-rule-stats 0,0,0,0,0,0,0,0
-py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --block-ascii XYZ
-py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --sm4-known-vector
-py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --aes-known-vector
-py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --sm4-two-block-vector
-py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --aes-two-block-vector
-py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --sm4-four-block-vector
-py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --aes-four-block-vector
-py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --sm4-eight-block-vector
-py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --aes-eight-block-vector
-py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --invalid-selector
-py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --query-stats --expect-stats 9,1,4,4,1
+powershell -ExecutionPolicy Bypass -File .\contest_project\scripts\build_rx50t_uart_crypto_probe.ps1
+```
+
+Program the board, then run CLI smoke:
+
+```powershell
+py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --baud 2000000 --query-stats
+py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --baud 2000000 --clear-pmu
+py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --baud 2000000 --query-pmu
+py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --baud 2000000 --sm4-known-vector
+py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --baud 2000000 --aes-known-vector
+```
+
+Launch GUI:
+
+```powershell
+py -3 .\contest_project\tools\rx50t_crypto_gui.py
 ```
 
 ## Latest Verified Results
 
-Latest BRAM-backed block-stream build:
-- `DRC = 0`
-- `WNS = 6.199ns`
-- `WHS = 0.031ns`
-- `Slice LUTs = 3432`
-- `Slice Registers = 4702`
-- `Slice = 1580`
-- `RAMB36E1 = 4`
-- `RAMB18E1 = 1`
+Latest build and board-tested tag:
+- `pmu-v1.1-stream-2mbaud-20260413`
+
+Fresh build result:
+- bitstream:
+  - `contest_project/build/rx50t_uart_crypto_probe/rx50t_uart_crypto_probe.runs/impl_1/rx50t_uart_crypto_probe_board_top.bit`
+- `impl WNS = 5.888ns`
+- `impl WHS = 0.035ns`
+- `Slice LUTs = 3969 (12.17%)`
+- `Slice Registers = 5628 (8.63%)`
+- `Block RAM Tile = 4.5 (6.00%)`
 - `DSP = 0`
 
-Fresh BRAM-backed ACL smoke test:
-- initial stats query: `53 00 00 00 00 00 0A`
-- `SM4 16B`: pass
-- `AES 16B`: pass
-- ACL block: `XYZ -> 44 0A`
-- final stats query: `53 02 01 00 01 00 0A`
+Fresh CLI smoke on the programmed board:
+- `--query-stats`: pass
+- `--clear-pmu`: pass
+- `--query-pmu`: pass
+  - `clk_hz = 50000000`
+  - all counters cleared to `0`
+- `SM4 16B` known vector: pass
+- `AES 16B` known vector: pass
 
-Board-side rule-counter query:
-- persistent-session real-board check with a short host-side settle between blocked frames:
-  - before:
-    - `X=1, P=0`
-  - `XYZ -> 44 0A`
-  - `PQR -> 44 0A`
-  - after:
-    - `X=2, P=1`
-  - observed delta:
-    - `X:+1`
-    - `P:+1`
-- the GUI now applies a short delayed auto-refresh after ACL block events so the board-side rule counters are read back after this settle window
-
-Expanded rule-table smoke test:
-- before `XYZ`: `53 00 00 00 00 00 0A`
-- `XYZ -> 44 0A`
-- after `XYZ`: `53 01 01 00 00 00 0A`
-- before `PQR`: `53 01 01 00 00 00 0A`
-- `PQR -> 44 0A`
-- after `PQR`: `53 02 02 00 00 00 0A`
-
-Real-board verified:
-- initial stats query: `53 00 00 00 00 00 0A`
-- ACL block: `XYZ -> 44 0A`
-- `SM4` known vector: pass
-- `AES` known vector: pass
-- `SM4` two-block vector: pass
-- `AES` two-block vector: pass
-- `SM4` four-block vector: pass
-- `AES` four-block vector: pass
-- invalid selector: `45 0A`
-- final stats query: `53 07 01 03 03 01 0A`
-
-Fresh 64B multiblock smoke:
-- `SM4 64B`: pass
-- `AES 64B`: pass
-- stats after the two 64B vectors:
-  - `53 02 00 01 01 00 0A`
-
-Fresh 128B block-stream smoke:
-- initial stats query:
-  - `53 00 00 00 00 00 0A`
-- `SM4 128B`: pass
-- `AES 128B`: pass
-- final stats query:
-  - `53 02 00 01 01 00 0A`
-
-GUI real-board walkthrough verified:
-- connect `COM12`
-- `Query Stats`: pass
-- `Query Rule Hits`: pass
-- `SM4 16B`: pass
-- `AES 16B`: pass
-- `ACL Block (XYZ)`: pass
-- `SM4 32B`: pass
-- `AES 32B`: pass
-- final GUI stats: `53 05 01 02 02 00 0A`
-- GUI rule-hit panel now refreshes from board-side ACL counters
-
-GUI file-encryption walkthrough verified:
-- `SM4` file demo through the Tkinter GUI: pass
-  - input sample:
-    - `contest_project/demo_assets/demo_sm4_32b.bin`
-  - generated output:
-    - `contest_project/demo_assets/demo_sm4_32b.bin.sm4.bin`
-  - expected reference:
-    - `contest_project/demo_assets/expected_sm4_32b.bin`
-- `AES` file demo through the Tkinter GUI: pass
-  - input sample:
-    - `contest_project/demo_assets/demo_aes_32b.bin`
-  - generated output:
-    - `contest_project/demo_assets/demo_aes_32b.bin.aes.bin`
-  - expected reference:
-    - `contest_project/demo_assets/expected_aes_32b.bin`
-- result:
-  - both generated files matched their expected ciphertext references exactly
-
-GUI shared worker file-encryption path verified on the real board for `128B` samples:
+Fresh GUI worker run on the real board with `512KB` file traffic:
 - `SM4`
-  - input sample:
-    - `contest_project/demo_assets/demo_sm4_128b.bin`
-  - generated output:
-    - `contest_project/demo_assets/demo_sm4_128b.bin.sm4.bin`
-  - expected reference:
-    - `contest_project/demo_assets/expected_sm4_128b.bin`
+  - PMU snapshot:
+    - `global=266580316`
+    - `crypto_active=655360`
+    - `uart_tx_stall=134287671`
+    - `credit_block=0`
+    - `acl_events=0`
+  - derived ratios:
+    - `HW Util = 0.25%`
+    - `UART Stall = 50.36%`
+    - `Credit Block = 0.00%`
 - `AES`
-  - input sample:
-    - `contest_project/demo_assets/demo_aes_128b.bin`
-  - generated output:
-    - `contest_project/demo_assets/demo_aes_128b.bin.aes.bin`
-  - expected reference:
-    - `contest_project/demo_assets/expected_aes_128b.bin`
-- result:
-  - both `128B` generated files matched their expected ciphertext references exactly
+  - PMU snapshot:
+    - `global=266598814`
+    - `crypto_active=1835008`
+    - `uart_tx_stall=134284215`
+    - `credit_block=0`
+    - `acl_events=0`
+  - derived ratios:
+    - `HW Util = 0.69%`
+    - `UART Stall = 50.37%`
+    - `Credit Block = 0.00%`
 
-Oversize GUI worker path verified on the real board:
-- `160B` plaintext files were accepted without error
-- both `SM4` and `AES` were sliced into:
-  - chunk `1/2`: `128B`
-  - chunk `2/2`: `128B`
-- the short tail was padded with `96` bytes of `PKCS#7`
-- final ciphertext output length became `256B`
-- throughput remained live during the ping-pong loop
+Interpretation of the latest PMU evidence:
+- the current bottleneck is still the UART transmit side and host link behavior
+- the crypto engine is not saturated
+- the streaming window did not become the dominant limiter in the verified `512KB` board run
 
-## Relation to the Original Project
+Fresh ACL runtime path verification:
+- GUI `Deploy Threat Signature`: verified
+- live key-map readback on connect: verified
+- ACL block flash in threat array: verified
+- PMU snapshot after ACL event:
+  - `global=16096984`
+  - `crypto_active=0`
+  - `uart_tx_stall=2242`
+  - `credit_block=0`
+  - `acl_events=1`
 
-This repository is the trimmed `RX50T` pure-`PL` contest branch extracted from a much larger original project.
-It no longer tries to carry the original `Zynq + ARM + DMA + DDR` heterogeneous system.
+## Documentation Entry Points
+
+- [Daily progress index](./daily-progress/README.md)
+- [Current baseline](./docs/RX50T_CURRENT_BASELINE.md)
+- [Architecture overview](./docs/RX50T_ARCHITECTURE_OVERVIEW.md)
+- [P1 demo runbook](./docs/RX50T_P1_DEMO_RUNBOOK.md)
+
+## Current Boundaries
+
+- ACL v1 hot update is `1-byte` rule provisioning, not a `16B` signature matcher
+- updates are not persistent across reset or power cycle
+- the board-side transport unit is still `128B`
+- PMU v1.1 provides hardware-side ratios and raw counters, not a standalone hardware Mbps counter
+- GUI rendering can still lag behind sustained traffic; PMU is the authoritative source for bottleneck attribution
+
+## Explicitly Out of Scope
+
+- `ARM/PS`
+- `DMA / DDR / PBM`
+- full `Ethernet/IP/UDP`
+- persistent ACL storage in flash
+- decryption and unpadding path
+- `16B` sliding-window signature ACL
