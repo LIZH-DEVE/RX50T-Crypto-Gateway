@@ -67,6 +67,9 @@ class CryptoGatewayApp(tk.Tk):
             "uart_stall": tk.StringVar(value="0.0%"),
             "credit_block": tk.StringVar(value="0.0%"),
             "acl_events": tk.StringVar(value="0"),
+            "stream_bytes_in": tk.StringVar(value="0"),
+            "stream_bytes_out": tk.StringVar(value="0"),
+            "stream_chunks": tk.StringVar(value="0"),
         }
         self.bench_vars = {
             "status": tk.StringVar(value="-"),
@@ -84,6 +87,29 @@ class CryptoGatewayApp(tk.Tk):
             "progress": tk.StringVar(value="0 / 0 ACKed"),
             "pulse": tk.StringVar(value="IDLE"),
         }
+        self.evidence_live_vars = {
+            "wire_mbps": tk.StringVar(value="- Mbps"),
+            "chip_mbps": tk.StringVar(value="- Mbps"),
+            "gap_ratio": tk.StringVar(value="-"),
+            "hw_util": tk.StringVar(value="-"),
+            "uart_stall": tk.StringVar(value="-"),
+            "credit_block": tk.StringVar(value="-"),
+            "stream_in": tk.StringVar(value="-"),
+            "stream_out": tk.StringVar(value="-"),
+            "stream_chunks": tk.StringVar(value="-"),
+        }
+        self.evidence_frozen_vars = {
+            "wire_mbps": tk.StringVar(value="- Mbps"),
+            "chip_mbps": tk.StringVar(value="- Mbps"),
+            "gap_ratio": tk.StringVar(value="-"),
+            "hw_util": tk.StringVar(value="-"),
+            "uart_stall": tk.StringVar(value="-"),
+            "credit_block": tk.StringVar(value="-"),
+            "stream_in": tk.StringVar(value="-"),
+            "stream_out": tk.StringVar(value="-"),
+            "stream_chunks": tk.StringVar(value="-"),
+        }
+        self.evidence_frozen_active = False
         self.file_done_chunks = 0
         self.file_total_chunks = 0
         self.file_pulse_job: str | None = None
@@ -113,8 +139,8 @@ class CryptoGatewayApp(tk.Tk):
 
         self._build_ui()
         self._refresh_ports()
-        self.after(100, self._poll_worker)
-        self.after(100, self._sample_throughput)
+        self.after(80, self._poll_worker)
+        self.after(80, self._sample_throughput)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _setup_theme(self) -> None:
@@ -995,12 +1021,84 @@ class CryptoGatewayApp(tk.Tk):
         self.pmu_vars["uart_stall"].set("0.0%")
         self.pmu_vars["credit_block"].set("0.0%")
         self.pmu_vars["acl_events"].set("0")
+        self.pmu_vars["stream_bytes_in"].set("0")
+        self.pmu_vars["stream_bytes_out"].set("0")
+        self.pmu_vars["stream_chunks"].set("0")
+
+    def _reset_frozen_evidence(self) -> None:
+        self.evidence_frozen_vars["wire_mbps"].set("- Mbps")
+        self.evidence_frozen_vars["chip_mbps"].set("- Mbps")
+        self.evidence_frozen_vars["gap_ratio"].set("-")
+        self.evidence_frozen_vars["hw_util"].set("-")
+        self.evidence_frozen_vars["uart_stall"].set("-")
+        self.evidence_frozen_vars["credit_block"].set("-")
+        self.evidence_frozen_vars["stream_in"].set("-")
+        self.evidence_frozen_vars["stream_out"].set("-")
+        self.evidence_frozen_vars["stream_chunks"].set("-")
+        self.evidence_frozen_active = False
 
     def _apply_pmu_snapshot(self, payload: dict) -> None:
         self.pmu_vars["hw_util"].set(f"{float(payload['crypto_utilization']) * 100.0:.2f}%")
         self.pmu_vars["uart_stall"].set(f"{float(payload['uart_stall_ratio']) * 100.0:.2f}%")
         self.pmu_vars["credit_block"].set(f"{float(payload['credit_block_ratio']) * 100.0:.2f}%")
         self.pmu_vars["acl_events"].set(str(int(payload["acl_block_events"])))
+        self.pmu_vars["stream_bytes_in"].set(str(int(payload.get("stream_bytes_in", 0))))
+        self.pmu_vars["stream_bytes_out"].set(str(int(payload.get("stream_bytes_out", 0))))
+        self.pmu_vars["stream_chunks"].set(str(int(payload.get("stream_chunk_count", 0))))
+
+    def _freeze_evidence_snapshot(self, wire_mbps: float, total_bytes: int, chunk_count: int) -> None:
+        self.evidence_frozen_vars["wire_mbps"].set(f"{wire_mbps:.3f} Mbps")
+        self.evidence_frozen_vars["chip_mbps"].set(self.evidence_live_vars["chip_mbps"].get())
+        self.evidence_frozen_vars["gap_ratio"].set(self.evidence_live_vars["gap_ratio"].get())
+        self.evidence_frozen_vars["hw_util"].set(self.evidence_live_vars["hw_util"].get())
+        self.evidence_frozen_vars["uart_stall"].set(self.evidence_live_vars["uart_stall"].get())
+        self.evidence_frozen_vars["credit_block"].set(self.evidence_live_vars["credit_block"].get())
+        self.evidence_frozen_vars["stream_in"].set(self.evidence_live_vars["stream_in"].get())
+        self.evidence_frozen_vars["stream_out"].set(self.evidence_live_vars["stream_out"].get())
+        self.evidence_frozen_vars["stream_chunks"].set(str(chunk_count))
+        self.evidence_frozen_active = True
+
+    def _update_live_evidence(self, payload: dict) -> None:
+        stream_in = int(payload.get("stream_bytes_in", 0))
+        stream_out = int(payload.get("stream_bytes_out", 0))
+        global_cycles = int(payload.get("global_cycles", 1))
+        crypto_active = int(payload.get("crypto_active_cycles", 0))
+        hw_util = float(payload["crypto_utilization"]) if "crypto_utilization" in payload else 0.0
+        self.evidence_live_vars["hw_util"].set(f"{hw_util * 100.0:.2f}%")
+        self.evidence_live_vars["uart_stall"].set(f"{float(payload.get('uart_stall_ratio', 0.0)) * 100.0:.2f}%")
+        self.evidence_live_vars["credit_block"].set(f"{float(payload.get('credit_block_ratio', 0.0)) * 100.0:.2f}%")
+        self.evidence_live_vars["stream_in"].set(self._format_bytes(stream_in))
+        self.evidence_live_vars["stream_out"].set(self._format_bytes(stream_out))
+        self.evidence_live_vars["stream_chunks"].set(str(int(payload.get("stream_chunk_count", 0))))
+        if global_cycles > 0 and stream_out > 0:
+            chip_mbps = (stream_out * 8) / (global_cycles / int(payload.get("clk_hz", 50_000_000))) / 1_000_000.0
+            self.evidence_live_vars["chip_mbps"].set(f"{chip_mbps:.3f} Mbps")
+        wire_mbps_str = self.evidence_live_vars["wire_mbps"].get()
+        if wire_mbps_str not in ("- Mbps", "") and " Mbps" in wire_mbps_str:
+            try:
+                wire_val = float(wire_mbps_str.split()[0])
+                if wire_val > 0:
+                    chip_val_str = self.evidence_live_vars["chip_mbps"].get()
+                    if " Mbps" in chip_val_str:
+                        chip_val = float(chip_val_str.split()[0])
+                        gap = (wire_val - chip_val) / wire_val
+                        self.evidence_live_vars["gap_ratio"].set(f"{gap * 100.0:.1f}%")
+                    else:
+                        self.evidence_live_vars["gap_ratio"].set("-")
+                else:
+                    self.evidence_live_vars["gap_ratio"].set("-")
+            except (ValueError, IndexError):
+                self.evidence_live_vars["gap_ratio"].set("-")
+        else:
+            self.evidence_live_vars["gap_ratio"].set("-")
+
+    def _format_bytes(self, n: int) -> str:
+        if n >= 1_048_576:
+            return f"{n / 1_048_576:.2f} MiB"
+        elif n >= 1024:
+            return f"{n / 1024:.2f} KiB"
+        else:
+            return f"{n} B"
 
     def _apply_bench_result(self, payload: dict) -> None:
         status_value = payload.get("status_text")
@@ -1022,6 +1120,40 @@ class CryptoGatewayApp(tk.Tk):
             self.bench_vars["mbps"].set(f"{float(effective_mbps):.3f} Mbps")
         self.bench_vars["cycles"].set(str(int(payload.get("cycles", 0))))
         self.bench_vars["crc32"].set(f"0x{int(payload.get('crc32', 0)):08X}")
+
+    def _apply_pmu_snapshot_to_evidencelive(self, payload: dict) -> None:
+        self.evidence_live_vars["hw_util"].set(f"{float(payload['crypto_utilization']) * 100.0:.2f}%")
+        self.evidence_live_vars["uart_stall"].set(f"{float(payload['uart_stall_ratio']) * 100.0:.2f}%")
+        self.evidence_live_vars["credit_block"].set(f"{float(payload['credit_block_ratio']) * 100.0:.2f}%")
+        self.evidence_live_vars["stream_in"].set(str(int(payload.get("stream_bytes_in", 0))))
+        self.evidence_live_vars["stream_out"].set(str(int(payload.get("stream_bytes_out", 0))))
+        self.evidence_live_vars["stream_chunks"].set(str(int(payload.get("stream_chunk_count", 0))))
+
+    def _update_frozen_from_live(self) -> None:
+        chip_mbps_live = self.evidence_live_vars["chip_mbps"].get()
+        if chip_mbps_live not in ("- Mbps", ""):
+            self.evidence_frozen_vars["chip_mbps"].set(chip_mbps_live)
+        gap_live = self.evidence_live_vars["gap_ratio"].get()
+        if gap_live not in ("-", ""):
+            self.evidence_frozen_vars["gap_ratio"].set(gap_live)
+        hw_live = self.evidence_live_vars["hw_util"].get()
+        if hw_live not in ("-", ""):
+            self.evidence_frozen_vars["hw_util"].set(hw_live)
+        us_live = self.evidence_live_vars["uart_stall"].get()
+        if us_live not in ("-", ""):
+            self.evidence_frozen_vars["uart_stall"].set(us_live)
+        cb_live = self.evidence_live_vars["credit_block"].get()
+        if cb_live not in ("-", ""):
+            self.evidence_frozen_vars["credit_block"].set(cb_live)
+        si_live = self.evidence_live_vars["stream_in"].get()
+        if si_live not in ("-", ""):
+            self.evidence_frozen_vars["stream_in"].set(si_live)
+        so_live = self.evidence_live_vars["stream_out"].get()
+        if so_live not in ("-", ""):
+            self.evidence_frozen_vars["stream_out"].set(so_live)
+        sc_live = self.evidence_live_vars["stream_chunks"].get()
+        if sc_live not in ("-", "", "0"):
+            self.evidence_frozen_vars["stream_chunks"].set(sc_live)
 
     def _draw_chart(self) -> None:
         self.chart.delete("all")
@@ -1071,7 +1203,7 @@ class CryptoGatewayApp(tk.Tk):
         self.mbps_history.append(mbps)
         self.throughput_label.set(f"{mbps:.3f} Mbps")
         self._draw_chart()
-        self.throughput_sample_job = self.after(100, self._sample_throughput)
+        self.throughput_sample_job = self.after(80, self._sample_throughput)
 
     def _draw_file_progress(self) -> None:
         canvas = self.file_progress_canvas
@@ -1255,7 +1387,15 @@ class CryptoGatewayApp(tk.Tk):
             self._set_link_visual("#fca5a5", "PORT FAULT", "#fecaca")
             self._append_log(f"ERROR: {payload['message']}", "error")
             self._set_banner(f"Error: {payload['message']}", "error")
-            messagebox.showerror("Gateway Error", payload["message"])
+        elif kind == "fatal_error":
+            self._set_link_visual("#fca5a5", "FATAL ERROR", "#fecaca")
+            fatal_reason = f"code=0x{int(payload['code']):02X}"
+            if int(payload['code']) == 0x01:
+                fatal_reason = "Stream Watchdog Timeout"
+            elif int(payload['code']) == 0x02:
+                fatal_reason = "Crypto Watchdog Timeout"
+            self._append_log(f"FATAL: {fatal_reason} during {payload.get('name', 'unknown')}", "error")
+            self._set_banner(f"FATAL ERROR: {fatal_reason}", "error")
         elif kind == "result":
             tx = payload["tx"]
             rx = payload["rx"]
@@ -1365,6 +1505,8 @@ class CryptoGatewayApp(tk.Tk):
             self._set_banner("Hardware PMU counters cleared.", "pass" if payload["passed"] else "error")
         elif kind == "bench_result":
             self._apply_bench_result(payload)
+            if payload.get("effective_mbps") is not None:
+                self.evidence_live_vars["chip_mbps"].set(f"{float(payload['effective_mbps']):.3f} Mbps")
             self._append_log(
                 "BENCH RESULT: "
                 f"{payload.get('algo_name', payload.get('algo'))} "
@@ -1387,6 +1529,12 @@ class CryptoGatewayApp(tk.Tk):
         elif kind == "pmu_snapshot":
             self._record_transport_activity(len(payload["rx"]), float(payload["duration_s"]))
             self._apply_pmu_snapshot(payload)
+            source = str(payload.get("source", ""))
+            self._update_live_evidence(payload)
+            if self.evidence_frozen_active:
+                self._update_frozen_from_live()
+            else:
+                self._apply_pmu_snapshot_to_evidencelive(payload)
             self._append_log(
                 "PMU SNAPSHOT: "
                 f"clk={payload['clk_hz']} "
@@ -1394,7 +1542,10 @@ class CryptoGatewayApp(tk.Tk):
                 f"crypto={payload['crypto_active_cycles']} "
                 f"uart_stall={payload['uart_tx_stall_cycles']} "
                 f"credit_block={payload['stream_credit_block_cycles']} "
-                f"acl_events={payload['acl_block_events']}",
+                f"acl_events={payload['acl_block_events']} "
+                f"stream_in={payload.get('stream_bytes_in', 0)} "
+                f"stream_out={payload.get('stream_bytes_out', 0)} "
+                f"chunks={payload.get('stream_chunk_count', 0)}",
                 "pass" if payload["passed"] else "error",
             )
             self._set_banner(
@@ -1405,6 +1556,7 @@ class CryptoGatewayApp(tk.Tk):
             )
         elif kind == "file_begin":
             self._begin_file_status(payload)
+            self._reset_frozen_evidence()
             self._append_log(
                 f"FILE BEGIN {payload['algo']}: logical={payload['original_bytes']} transport={payload['total_bytes']} "
                 f"pad={payload['pad_bytes']} chunks={payload['chunk_count']}",
@@ -1452,20 +1604,18 @@ class CryptoGatewayApp(tk.Tk):
                 f"(pad {payload.get('pad_bytes', 0)}, chunks {payload.get('chunk_count', '?')})",
                 "pass",
             )
-            messagebox.showinfo(
-                "File Encryption Complete",
-                "Output written to:\n"
-                f"{payload['output_path']}\n\n"
-                f"Original bytes: {payload.get('original_bytes', payload['total_bytes'])}\n"
-                f"Transport bytes: {payload['total_bytes']}\n"
-                f"PKCS#7 pad bytes: {payload.get('pad_bytes', 0)}\n"
-                f"Chunks: {payload.get('chunk_count', '?')}",
-            )
+            wire_mbps = float(payload["throughput_mbps"])
+            total_bytes = int(payload.get("total_bytes", 0))
+            chunk_count = int(payload.get("chunk_count", 0))
+            self.evidence_live_vars["wire_mbps"].set(f"{wire_mbps:.3f} Mbps")
+            self.evidence_live_vars["stream_chunks"].set(str(chunk_count))
+            self._freeze_evidence_snapshot(wire_mbps, total_bytes, chunk_count)
+
 
     def _poll_worker(self) -> None:
         for event in self.worker.poll_events():
             self._handle_event(event)
-        self.after(100, self._poll_worker)
+        self.after(80, self._poll_worker)
 
     def _on_close(self) -> None:
         if self.rule_refresh_job is not None:

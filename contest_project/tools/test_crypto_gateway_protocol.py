@@ -9,6 +9,7 @@ from crypto_gateway_protocol import (
     AclRuleCounters,
     AclWriteAck,
     BenchResult,
+    FatalErrorResponse,
     FileChunkPlan,
     PmuClearAck,
     PmuSnapshot,
@@ -126,6 +127,10 @@ class CryptoGatewayProtocolTests(unittest.TestCase):
             uart_tx_stall_cycles=256,
             stream_credit_block_cycles=128,
             acl_block_events=0,
+            version=0x02,
+            stream_bytes_in=1024,
+            stream_bytes_out=768,
+            stream_chunk_count=6,
         )
 
     def test_build_frame_wraps_payload(self) -> None:
@@ -171,7 +176,9 @@ class CryptoGatewayProtocolTests(unittest.TestCase):
     def test_case_query_pmu_builds_query_frame(self) -> None:
         case = case_query_pmu()
         self.assertEqual(case.tx, bytes([0x55, 0x01, 0x50]))
-        self.assertEqual(case.response_len, 48)
+        self.assertEqual(case.response_len, 0)
+        self.assertEqual(case.response_mode, "framed")
+        self.assertEqual(case.response_opcode, 0x50)
 
     def test_case_clear_pmu_builds_clear_frame(self) -> None:
         case = case_clear_pmu()
@@ -246,12 +253,39 @@ class CryptoGatewayProtocolTests(unittest.TestCase):
                 uart_tx_stall_cycles=32,
                 stream_credit_block_cycles=16,
                 acl_block_events=3,
+                version=1,
             ),
         )
         self.assertAlmostEqual(snapshot.crypto_utilization, 0.25)
         self.assertAlmostEqual(snapshot.uart_stall_ratio, 0.125)
         self.assertAlmostEqual(snapshot.credit_block_ratio, 0.0625)
         self.assertAlmostEqual(snapshot.elapsed_ms_from_hw, 256 / 3_125_000 * 1000.0)
+        self.assertEqual(snapshot.version, 0x01)
+        self.assertIsNone(snapshot.stream_bytes_in)
+        self.assertIsNone(snapshot.stream_bytes_out)
+        self.assertIsNone(snapshot.stream_chunk_count)
+
+    def test_parse_pmu_snapshot_response_v2(self) -> None:
+        snapshot = parse_pmu_snapshot_response(
+            bytes.fromhex(
+                "55 46 50 02"
+                " 02 FA F0 80"
+                " 00 00 00 00 00 00 10 00"
+                " 00 00 00 00 00 00 04 00"
+                " 00 00 00 00 00 00 02 00"
+                " 00 00 00 00 00 00 01 00"
+                " 00 00 00 00 00 00 00 03"
+                " 00 00 00 00 00 00 08 00"
+                " 00 00 00 00 00 00 07 80"
+                " 00 00 00 00 00 00 00 10"
+            )
+        )
+        self.assertEqual(snapshot.version, 0x02)
+        self.assertEqual(snapshot.clk_hz, 50_000_000)
+        self.assertEqual(snapshot.global_cycles, 4096)
+        self.assertEqual(snapshot.stream_bytes_in, 2048)
+        self.assertEqual(snapshot.stream_bytes_out, 1920)
+        self.assertEqual(snapshot.stream_chunk_count, 16)
 
     def test_parse_pmu_clear_ack(self) -> None:
         ack = parse_pmu_clear_ack(bytes([0x55, 0x02, 0x4A, 0x00]))
@@ -618,6 +652,18 @@ class CryptoGatewayProtocolTests(unittest.TestCase):
     def test_parse_stream_error_response(self) -> None:
         message = parse_stream_response(bytes([0x55, 0x02, 0x45, 0x02]))
         self.assertEqual(message, StreamErrorResponse(code=0x02))
+
+    def test_parse_stream_fatal_response(self) -> None:
+        message = parse_stream_response(bytes([0x55, 0x02, 0xEE, 0x01]))
+        self.assertEqual(message, FatalErrorResponse(code=0x01))
+
+    def test_run_case_on_serial_returns_fatal_error_for_framed_query(self) -> None:
+        case = case_query_pmu()
+        ser = FakeSerial(bytes([0x55, 0x02, 0xEE, 0x02]))
+        result = run_case_on_serial(ser, case, 3.0)
+        self.assertFalse(result.passed)
+        self.assertEqual(result.fatal_error, FatalErrorResponse(code=0x02))
+        self.assertIsNone(result.pmu_snapshot)
 
     def test_parse_rule_byte_input_accepts_ascii(self) -> None:
         self.assertEqual(parse_rule_byte_input("Q"), 0x51)

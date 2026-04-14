@@ -17,6 +17,7 @@ except ImportError as exc:  # pragma: no cover
 from crypto_gateway_protocol import (
     BenchResult,
     StreamBlockResponse,
+    FatalErrorResponse,
     StreamCipherResponse,
     StreamErrorResponse,
     StreamStartAck,
@@ -32,6 +33,12 @@ from crypto_gateway_protocol import (
     run_host_case_on_serial,
     run_case_on_serial,
 )
+
+
+class HardwareFatalError(RuntimeError):
+    def __init__(self, code: int):
+        super().__init__(f"Hardware fatal error: 0x{code:02X}")
+        self.code = code
 
 
 @dataclass(frozen=True)
@@ -234,10 +241,10 @@ def stream_encrypt_file_v3_on_serial(
         if isinstance(response, StreamErrorResponse):
             raise RuntimeError(f"Stream error code=0x{response.code:02X}")
 
-        raise RuntimeError("Unexpected stream response type")
+        if isinstance(response, FatalErrorResponse):
+            raise HardwareFatalError(response.code)
 
-        if (time.perf_counter() - last_progress) >= watchdog_s:
-            raise RuntimeError("Hardware Link Timeout")
+        raise RuntimeError("Unexpected stream response type")
 
     elapsed = max(time.perf_counter() - started, 1e-9)
     return StreamSessionResult(
@@ -367,6 +374,22 @@ class GatewayWorker:
     def _handle_case(self, case, timeout_s: float) -> None:
         ser = self._ensure_serial()
         result = run_host_case_on_serial(ser, case, timeout_s, baud=self._connected_baud)
+
+        if result.fatal_error is not None:
+            self._emit(
+                "fatal_error",
+                name=case.name,
+                tx=result.tx,
+                rx=result.rx,
+                expected=result.expected,
+                passed=result.passed,
+                duration_s=result.duration_s,
+                throughput_mbps=result.throughput_mbps,
+                description=case.description,
+                code=result.fatal_error.code,
+            )
+            return
+
         if result.pmu_snapshot is not None:
             self._emit_pmu_snapshot(result)
             return
@@ -507,6 +530,9 @@ class GatewayWorker:
             uart_stall_ratio=snapshot.uart_stall_ratio,
             credit_block_ratio=snapshot.credit_block_ratio,
             elapsed_ms_from_hw=snapshot.elapsed_ms_from_hw,
+            stream_bytes_in=snapshot.stream_bytes_in,
+            stream_bytes_out=snapshot.stream_bytes_out,
+            stream_chunk_count=snapshot.stream_chunk_count,
         )
 
     def _query_pmu_after_session(
@@ -627,6 +653,26 @@ class GatewayWorker:
                 avg_chunk_ms=(result.session_elapsed_s * 1000.0) / max(result.total_chunks, 1),
                 force_flush=force_flush,
             )
+        except HardwareFatalError as exc:
+            self._emit(
+                "fatal_error",
+                name="Stream Encrypt File",
+                path=str(path),
+                algo=algo.upper(),
+                code=exc.code,
+                tx=b"",
+                rx=b"",
+                expected=None,
+                passed=False,
+                duration_s=0.0,
+                throughput_mbps=0.0,
+                description="Hardware watchdog timeout or fatal error during stream operation",
+            )
+            try:
+                self._query_pmu_after_session(ser, timeout_s)
+            except Exception:
+                pass
+            return
         except Exception:
             try:
                 self._query_pmu_after_session(ser, timeout_s)

@@ -110,15 +110,23 @@ class PmuSnapshot:
     uart_tx_stall_cycles: int
     stream_credit_block_cycles: int
     acl_block_events: int
+    version: int = 2
+    stream_bytes_in: int | None = None
+    stream_bytes_out: int | None = None
+    stream_chunk_count: int | None = None
 
     def as_bytes(self) -> bytes:
-        payload = bytearray([0x50, 0x01])
+        payload = bytearray([0x50, self.version])
         payload.extend(self.clk_hz.to_bytes(4, "big"))
         payload.extend(self.global_cycles.to_bytes(8, "big"))
         payload.extend(self.crypto_active_cycles.to_bytes(8, "big"))
         payload.extend(self.uart_tx_stall_cycles.to_bytes(8, "big"))
         payload.extend(self.stream_credit_block_cycles.to_bytes(8, "big"))
         payload.extend(self.acl_block_events.to_bytes(8, "big"))
+        if self.version >= 2:
+            payload.extend((self.stream_bytes_in or 0).to_bytes(8, "big"))
+            payload.extend((self.stream_bytes_out or 0).to_bytes(8, "big"))
+            payload.extend((self.stream_chunk_count or 0).to_bytes(8, "big"))
         return bytes([0x55, len(payload)]) + bytes(payload)
 
     @property
@@ -220,6 +228,7 @@ class ProbeResult:
     pmu_snapshot: PmuSnapshot | None = None
     pmu_clear_ack: PmuClearAck | None = None
     bench_result: BenchResult | None = None
+    fatal_error: FatalErrorResponse | None = None
 
     @property
     def tx(self) -> bytes:
@@ -271,6 +280,14 @@ class StreamCipherResponse:
 class StreamBlockResponse:
     seq: int
     slot: int
+
+
+@dataclass(frozen=True)
+class FatalErrorResponse:
+    code: int
+
+    def as_bytes(self) -> bytes:
+        return bytes([0x55, 0x02, 0xEE, self.code])
 
 
 @dataclass(frozen=True)
@@ -370,16 +387,37 @@ def parse_acl_key_map_response(raw: bytes) -> AclKeyMap:
 
 
 def parse_pmu_snapshot_response(raw: bytes) -> PmuSnapshot:
-    if len(raw) != 48 or raw[:4] != bytes([0x55, 0x2E, 0x50, 0x01]):
+    if len(raw) < 4 or raw[0] != 0x55 or raw[2] != 0x50:
         raise ValueError(f"invalid PMU snapshot response: {format_hex(raw)}")
-    return PmuSnapshot(
-        clk_hz=int.from_bytes(raw[4:8], "big"),
-        global_cycles=int.from_bytes(raw[8:16], "big"),
-        crypto_active_cycles=int.from_bytes(raw[16:24], "big"),
-        uart_tx_stall_cycles=int.from_bytes(raw[24:32], "big"),
-        stream_credit_block_cycles=int.from_bytes(raw[32:40], "big"),
-        acl_block_events=int.from_bytes(raw[40:48], "big"),
-    )
+    version = raw[3]
+    if version == 0x01:
+        if len(raw) != 48 or raw[1] != 0x2E:
+            raise ValueError(f"invalid PMU v1 snapshot response: {format_hex(raw)}")
+        return PmuSnapshot(
+            clk_hz=int.from_bytes(raw[4:8], "big"),
+            global_cycles=int.from_bytes(raw[8:16], "big"),
+            crypto_active_cycles=int.from_bytes(raw[16:24], "big"),
+            uart_tx_stall_cycles=int.from_bytes(raw[24:32], "big"),
+            stream_credit_block_cycles=int.from_bytes(raw[32:40], "big"),
+            acl_block_events=int.from_bytes(raw[40:48], "big"),
+            version=1,
+        )
+    if version == 0x02:
+        if len(raw) != 72 or raw[1] != 0x46:
+            raise ValueError(f"invalid PMU v2 snapshot response: {format_hex(raw)}")
+        return PmuSnapshot(
+            clk_hz=int.from_bytes(raw[4:8], "big"),
+            global_cycles=int.from_bytes(raw[8:16], "big"),
+            crypto_active_cycles=int.from_bytes(raw[16:24], "big"),
+            uart_tx_stall_cycles=int.from_bytes(raw[24:32], "big"),
+            stream_credit_block_cycles=int.from_bytes(raw[32:40], "big"),
+            acl_block_events=int.from_bytes(raw[40:48], "big"),
+            stream_bytes_in=int.from_bytes(raw[48:56], "big"),
+            stream_bytes_out=int.from_bytes(raw[56:64], "big"),
+            stream_chunk_count=int.from_bytes(raw[64:72], "big"),
+            version=2,
+        )
+    raise ValueError(f"unsupported PMU schema version 0x{version:02X}: {format_hex(raw)}")
 
 
 def parse_pmu_clear_ack(raw: bytes) -> PmuClearAck:
@@ -401,7 +439,7 @@ def parse_bench_result_response(raw: bytes) -> BenchResult:
     )
 
 
-def parse_stream_response(raw: bytes) -> StreamCapabilities | StreamStartAck | StreamCipherResponse | StreamBlockResponse | StreamErrorResponse:
+def parse_stream_response(raw: bytes) -> StreamCapabilities | StreamStartAck | StreamCipherResponse | StreamBlockResponse | StreamErrorResponse | FatalErrorResponse:
     if len(raw) < 3 or raw[0] != 0x55:
         raise ValueError(f"invalid stream frame: {format_hex(raw)}")
 
@@ -420,6 +458,8 @@ def parse_stream_response(raw: bytes) -> StreamCapabilities | StreamStartAck | S
         return StreamBlockResponse(seq=payload[1], slot=payload[2])
     if payload_len == 2 and payload[:1] == b"E":
         return StreamErrorResponse(code=payload[1])
+    if payload_len == 2 and payload[:1] == b"\xEE":
+        return FatalErrorResponse(code=payload[1])
 
     raise ValueError(f"unsupported stream response: {format_hex(raw)}")
 
@@ -484,11 +524,11 @@ def read_framed_response(
             continue
 
         frame = b"\x55" + len_bytes + payload
-        if expected_opcode is not None and (payload_len == 0 or payload[0] != expected_opcode):
+        if expected_opcode is not None and (payload_len == 0 or (payload[0] != expected_opcode and payload[0] != 0xEE)):
             continue
         return frame
 
-    raise RuntimeError("Timed out waiting for framed response")
+    return b""
 
 
 def pkcs7_pad(payload: bytes, block_size: int) -> bytes:
@@ -712,10 +752,12 @@ def case_query_pmu(expected: PmuSnapshot | None = None) -> ProbeCase:
     return ProbeCase(
         name="Query PMU",
         tx=build_frame(b"P"),
-        response_len=48,
+        response_len=0,
         expected=expected.as_bytes() if expected else None,
         description="PMU hardware snapshot readback",
         kind="pmu_query",
+        response_mode="framed",
+        response_opcode=0x50,
     )
 
 
@@ -858,6 +900,21 @@ def run_case_on_serial(
     else:
         passed = case.expected is None or rx == case.expected
 
+    fatal_error = None
+    if rx.startswith(b"\x55\x02\xEE"):
+        try:
+            fatal_error = parse_stream_response(rx)
+            passed = False
+            stats = None
+            rule_stats = None
+            acl_write_ack = None
+            acl_key_map = None
+            pmu_snapshot = None
+            pmu_clear_ack = None
+            bench_result = None
+        except ValueError:
+            pass
+
     return ProbeResult(
         case=case,
         rx=rx,
@@ -870,6 +927,7 @@ def run_case_on_serial(
         pmu_snapshot=pmu_snapshot,
         pmu_clear_ack=pmu_clear_ack,
         bench_result=bench_result,
+        fatal_error=fatal_error,
     )
 
 

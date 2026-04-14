@@ -44,7 +44,10 @@ def _print_pmu_snapshot(snapshot: PmuSnapshot) -> None:
         f"crypto_active={snapshot.crypto_active_cycles} "
         f"uart_tx_stall={snapshot.uart_tx_stall_cycles} "
         f"credit_block={snapshot.stream_credit_block_cycles} "
-        f"acl_block_events={snapshot.acl_block_events}"
+        f"acl_block_events={snapshot.acl_block_events} "
+        f"stream_bytes_in={snapshot.stream_bytes_in} "
+        f"stream_bytes_out={snapshot.stream_bytes_out} "
+        f"stream_chunks={snapshot.stream_chunk_count}"
     )
 
 

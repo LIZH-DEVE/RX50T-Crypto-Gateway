@@ -57,6 +57,13 @@ module contest_uart_crypto_probe #(
     localparam [2:0] TX_OWNER_BENCH  = 3'd3;
     localparam [2:0] TX_OWNER_CTRL   = 3'd4;
     localparam [2:0] TX_OWNER_AXIS   = 3'd5;
+    localparam [2:0] TX_OWNER_FATAL  = 3'd6;
+
+    localparam [7:0] FATAL_STREAM_WATCHDOG = 8'h01;
+    localparam [7:0] FATAL_CRYPTO_WATCHDOG = 8'h02;
+    localparam integer STREAM_WDG_TIMEOUT = CLK_HZ;
+    localparam integer CRYPTO_WDG_TIMEOUT = CLK_HZ / 20;
+    localparam [2:0] QUIESCE_CYCLES = 3'd4;
 
     localparam [2:0] BENCH_IDLE       = 3'd0;
     localparam [2:0] BENCH_PICK_HEAD  = 3'd1;
@@ -245,73 +252,100 @@ module contest_uart_crypto_probe #(
 
     function automatic [7:0] pmu_tx_byte(
         input [1:0]  kind,
-        input [5:0]  idx,
+        input [6:0]  idx,
         input [63:0] global_cycles,
         input [63:0] crypto_active_cycles,
         input [63:0] uart_tx_stall_cycles,
         input [63:0] credit_block_cycles,
-        input [63:0] acl_block_events
+        input [63:0] acl_block_events,
+        input [63:0] stream_bytes_in,
+        input [63:0] stream_bytes_out,
+        input [63:0] stream_chunk_count
     );
         begin
             case (kind)
                 PMU_TX_CLEAR_ACK: begin
                     case (idx)
-                        6'd0: pmu_tx_byte = 8'h55;
-                        6'd1: pmu_tx_byte = 8'h02;
-                        6'd2: pmu_tx_byte = ASCII_PMU_CLR;
+                        7'd0: pmu_tx_byte = 8'h55;
+                        7'd1: pmu_tx_byte = 8'h02;
+                        7'd2: pmu_tx_byte = ASCII_PMU_CLR;
                         default: pmu_tx_byte = 8'h00;
                     endcase
                 end
                 PMU_TX_SNAPSHOT: begin
                     case (idx)
-                        6'd0: pmu_tx_byte = 8'h55;
-                        6'd1: pmu_tx_byte = 8'h2E;
-                        6'd2: pmu_tx_byte = ASCII_PMU_QRY;
-                        6'd3: pmu_tx_byte = 8'h01;
-                        6'd4,
-                        6'd5,
-                        6'd6,
-                        6'd7: pmu_tx_byte = be32_byte(idx[1:0], PMU_CLK_HZ);
-                        6'd8,
-                        6'd9,
-                        6'd10,
-                        6'd11,
-                        6'd12,
-                        6'd13,
-                        6'd14,
-                        6'd15: pmu_tx_byte = be64_byte(idx[2:0], global_cycles);
-                        6'd16,
-                        6'd17,
-                        6'd18,
-                        6'd19,
-                        6'd20,
-                        6'd21,
-                        6'd22,
-                        6'd23: pmu_tx_byte = be64_byte(idx[2:0], crypto_active_cycles);
-                        6'd24,
-                        6'd25,
-                        6'd26,
-                        6'd27,
-                        6'd28,
-                        6'd29,
-                        6'd30,
-                        6'd31: pmu_tx_byte = be64_byte(idx[2:0], uart_tx_stall_cycles);
-                        6'd32,
-                        6'd33,
-                        6'd34,
-                        6'd35,
-                        6'd36,
-                        6'd37,
-                        6'd38,
-                        6'd39: pmu_tx_byte = be64_byte(idx[2:0], credit_block_cycles);
-                        6'd40,
-                        6'd41,
-                        6'd42,
-                        6'd43,
-                        6'd44,
-                        6'd45,
-                        6'd46,
-                        6'd47: pmu_tx_byte = be64_byte(idx[2:0], acl_block_events);
+                        7'd0: pmu_tx_byte = 8'h55;
+                        7'd1: pmu_tx_byte = 8'h46;
+                        7'd2: pmu_tx_byte = ASCII_PMU_QRY;
+                        7'd3: pmu_tx_byte = 8'h02;
+                        7'd4,
+                        7'd5,
+                        7'd6,
+                        7'd7: pmu_tx_byte = be32_byte(idx[1:0], PMU_CLK_HZ);
+                        7'd8,
+                        7'd9,
+                        7'd10,
+                        7'd11,
+                        7'd12,
+                        7'd13,
+                        7'd14,
+                        7'd15: pmu_tx_byte = be64_byte(idx[2:0], global_cycles);
+                        7'd16,
+                        7'd17,
+                        7'd18,
+                        7'd19,
+                        7'd20,
+                        7'd21,
+                        7'd22,
+                        7'd23: pmu_tx_byte = be64_byte(idx[2:0], crypto_active_cycles);
+                        7'd24,
+                        7'd25,
+                        7'd26,
+                        7'd27,
+                        7'd28,
+                        7'd29,
+                        7'd30,
+                        7'd31: pmu_tx_byte = be64_byte(idx[2:0], uart_tx_stall_cycles);
+                        7'd32,
+                        7'd33,
+                        7'd34,
+                        7'd35,
+                        7'd36,
+                        7'd37,
+                        7'd38,
+                        7'd39: pmu_tx_byte = be64_byte(idx[2:0], credit_block_cycles);
+                        7'd40,
+                        7'd41,
+                        7'd42,
+                        7'd43,
+                        7'd44,
+                        7'd45,
+                        7'd46,
+                        7'd47: pmu_tx_byte = be64_byte(idx[2:0], acl_block_events);
+                        7'd48,
+                        7'd49,
+                        7'd50,
+                        7'd51,
+                        7'd52,
+                        7'd53,
+                        7'd54,
+                        7'd55: pmu_tx_byte = be64_byte(idx[2:0], stream_bytes_in);
+                        7'd56,
+                        7'd57,
+                        7'd58,
+                        7'd59,
+                        7'd60,
+                        7'd61,
+                        7'd62,
+                        7'd63: pmu_tx_byte = be64_byte(idx[2:0], stream_bytes_out);
+                        7'd64,
+                        7'd65,
+                        7'd66,
+                        7'd67,
+                        7'd68,
+                        7'd69,
+                        7'd70,
+                        7'd71: pmu_tx_byte = be64_byte(idx[2:0], stream_chunk_count);
                         default: pmu_tx_byte = 8'h00;
                     endcase
                 end
@@ -320,13 +354,30 @@ module contest_uart_crypto_probe #(
         end
     endfunction
 
-    function automatic [5:0] pmu_tx_last_idx(input [1:0] kind);
+    function automatic [6:0] pmu_tx_last_idx(input [1:0] kind);
         begin
             case (kind)
-                PMU_TX_SNAPSHOT:  pmu_tx_last_idx = 6'd47;
-                PMU_TX_CLEAR_ACK: pmu_tx_last_idx = 6'd3;
-                default:          pmu_tx_last_idx = 6'd0;
+                PMU_TX_SNAPSHOT:  pmu_tx_last_idx = 7'd71;
+                PMU_TX_CLEAR_ACK: pmu_tx_last_idx = 7'd3;
+                default:          pmu_tx_last_idx = 7'd0;
             endcase
+        end
+    endfunction
+
+    function automatic [7:0] fatal_tx_byte(input [1:0] idx, input [7:0] code);
+        begin
+            case (idx)
+                2'd0: fatal_tx_byte = 8'h55;
+                2'd1: fatal_tx_byte = 8'h02;
+                2'd2: fatal_tx_byte = 8'hEE;
+                default: fatal_tx_byte = code;
+            endcase
+        end
+    endfunction
+
+    function automatic [1:0] fatal_tx_last_idx(input [7:0] code);
+        begin
+            fatal_tx_last_idx = 2'd3;
         end
     endfunction
 
@@ -531,20 +582,29 @@ module contest_uart_crypto_probe #(
     reg [63:0] pmu_uart_tx_stall_cycles_q;
     reg [63:0] pmu_stream_credit_block_cycles_q;
     reg [63:0] pmu_acl_block_events_q;
+    reg [63:0] pmu_stream_bytes_in_q;
+    reg [63:0] pmu_stream_bytes_out_q;
+    reg [63:0] pmu_stream_chunk_count_q;
     reg [63:0] pmu_snap_global_cycles_q;
     reg [63:0] pmu_snap_crypto_active_cycles_q;
     reg [63:0] pmu_snap_uart_tx_stall_cycles_q;
     reg [63:0] pmu_snap_stream_credit_block_cycles_q;
     reg [63:0] pmu_snap_acl_block_events_q;
+    reg [63:0] pmu_snap_stream_bytes_in_q;
+    reg [63:0] pmu_snap_stream_bytes_out_q;
+    reg [63:0] pmu_snap_stream_chunk_count_q;
     reg        pmu_pending_q;
     reg  [1:0] pmu_pending_kind_q;
     reg  [1:0] pmu_tx_kind_q;
-    reg  [5:0] pmu_tx_idx_q;
+    reg  [6:0] pmu_tx_idx_q;
     reg [63:0] pmu_tx_global_cycles_q;
     reg [63:0] pmu_tx_crypto_active_cycles_q;
     reg [63:0] pmu_tx_uart_tx_stall_cycles_q;
     reg [63:0] pmu_tx_stream_credit_block_cycles_q;
     reg [63:0] pmu_tx_acl_block_events_q;
+    reg [63:0] pmu_tx_stream_bytes_in_q;
+    reg [63:0] pmu_tx_stream_bytes_out_q;
+    reg [63:0] pmu_tx_stream_chunk_count_q;
     reg  [2:0] bench_state_q;
     reg  [4:0] bench_tx_idx_q;
     reg  [3:0] bench_pick_idx_q;
@@ -601,6 +661,15 @@ module contest_uart_crypto_probe #(
     wire [7:0] bench_tx_data_w;
     reg  [7:0] ctrl_tx_data_r;
     reg        ctrl_tx_last_r;
+    reg        fatal_pending_q;
+    reg  [7:0] fatal_code_q;
+    reg  [2:0] quiesce_count_q;
+    reg        quiesce_active_q;
+    reg        drain_committed_q;
+    reg [31:0] stream_wdg_counter_q;
+    reg [31:0] crypto_wdg_counter_q;
+    reg        fatal_tx_active_q;
+    reg  [1:0] fatal_tx_idx_q;
     wire       ctrl_tx_valid_w;
     wire [7:0] ctrl_tx_data_w;
     wire       ctrl_tx_last_w;
@@ -641,7 +710,10 @@ module contest_uart_crypto_probe #(
                                     pmu_tx_crypto_active_cycles_q,
                                     pmu_tx_uart_tx_stall_cycles_q,
                                     pmu_tx_stream_credit_block_cycles_q,
-                                    pmu_tx_acl_block_events_q
+                                    pmu_tx_acl_block_events_q,
+                                    pmu_tx_stream_bytes_in_q,
+                                    pmu_tx_stream_bytes_out_q,
+                                    pmu_tx_stream_chunk_count_q
                                  );
     assign stream_tx_active_w = (stream_tx_kind_q != STREAM_TX_NONE);
     assign stream_tx_data_w   = stream_tx_byte(stream_tx_kind_q, stream_tx_idx_q, stream_tx_seq_q, stream_tx_slot_q, stream_tx_code_q);
@@ -713,11 +785,13 @@ module contest_uart_crypto_probe #(
                                (tx_owner_q == TX_OWNER_CTRL)   ? ctrl_tx_valid_w :
                                (tx_owner_q == TX_OWNER_AXIS)   ? (axis_out_tvalid_w &&
                                                                   axis_direct_allowed_w) :
+                               (tx_owner_q == TX_OWNER_FATAL)  ? fatal_tx_active_q :
                                                                   1'b0;
     assign tx_mux_data_w     = (tx_owner_q == TX_OWNER_BENCH)  ? bench_tx_data_w :
                                (tx_owner_q == TX_OWNER_PMU)    ? pmu_tx_data_w :
                                (tx_owner_q == TX_OWNER_STREAM) ? stream_source_data_w :
                                (tx_owner_q == TX_OWNER_CTRL)   ? ctrl_tx_data_w :
+                               (tx_owner_q == TX_OWNER_FATAL)  ? fatal_tx_byte(fatal_tx_idx_q, fatal_code_q) :
                                                                   axis_out_tdata_w;
     assign tx_fire_w         = tx_mux_valid_w && tx_ready;
     assign bench_last_fire_w  = (tx_owner_q == TX_OWNER_BENCH) &&
@@ -981,20 +1055,29 @@ module contest_uart_crypto_probe #(
             pmu_uart_tx_stall_cycles_q <= 64'd0;
             pmu_stream_credit_block_cycles_q <= 64'd0;
             pmu_acl_block_events_q    <= 64'd0;
+            pmu_stream_bytes_in_q     <= 64'd0;
+            pmu_stream_bytes_out_q    <= 64'd0;
+            pmu_stream_chunk_count_q  <= 64'd0;
             pmu_snap_global_cycles_q  <= 64'd0;
             pmu_snap_crypto_active_cycles_q <= 64'd0;
             pmu_snap_uart_tx_stall_cycles_q <= 64'd0;
             pmu_snap_stream_credit_block_cycles_q <= 64'd0;
             pmu_snap_acl_block_events_q <= 64'd0;
+            pmu_snap_stream_bytes_in_q  <= 64'd0;
+            pmu_snap_stream_bytes_out_q <= 64'd0;
+            pmu_snap_stream_chunk_count_q <= 64'd0;
             pmu_pending_q             <= 1'b0;
             pmu_pending_kind_q        <= PMU_TX_NONE;
             pmu_tx_kind_q             <= PMU_TX_NONE;
-            pmu_tx_idx_q              <= 6'd0;
+            pmu_tx_idx_q              <= 7'd0;
             pmu_tx_global_cycles_q    <= 64'd0;
             pmu_tx_crypto_active_cycles_q <= 64'd0;
             pmu_tx_uart_tx_stall_cycles_q <= 64'd0;
             pmu_tx_stream_credit_block_cycles_q <= 64'd0;
             pmu_tx_acl_block_events_q <= 64'd0;
+            pmu_tx_stream_bytes_in_q  <= 64'd0;
+            pmu_tx_stream_bytes_out_q <= 64'd0;
+            pmu_tx_stream_chunk_count_q <= 64'd0;
             bench_state_q             <= BENCH_IDLE;
             bench_tx_idx_q            <= 5'd0;
             bench_pick_idx_q          <= 4'd0;
@@ -1040,16 +1123,69 @@ module contest_uart_crypto_probe #(
             axis_soft_reset_q         <= 1'b0;
             crc_pipe_valid_q          <= 1'b0;
             crc_pipe_last_q           <= 1'b0;
+            fatal_pending_q           <= 1'b0;
+            fatal_code_q              <= 8'd0;
+            quiesce_count_q           <= 3'd0;
+            quiesce_active_q          <= 1'b0;
+            drain_committed_q         <= 1'b0;
+            stream_wdg_counter_q      <= 32'd0;
+            crypto_wdg_counter_q      <= 32'd0;
+            fatal_tx_active_q         <= 1'b0;
+            fatal_tx_idx_q            <= 2'd0;
             crc_pipe_data_q           <= 8'd0;
         end else begin
             acl_in_valid_q    <= 1'b0;
             acl_in_data_q     <= 8'd0;
             acl_in_last_q     <= 1'b0;
+            if (fatal_pending_q && !fatal_tx_active_q && !quiesce_active_q && !drain_committed_q) begin
+                axis_soft_reset_q         <= 1'b1;
+                stream_session_active_q   <= 1'b0;
+                stream_session_fault_q    <= 1'b1;
+                acl_frame_active_q        <= 1'b0;
+                acl_in_valid_q           <= 1'b0;
+                stream_seq_wr_ptr_q       <= 3'd0;
+                stream_seq_rd_ptr_q       <= 3'd0;
+                stream_seq_count_q        <= 4'd0;
+                stream_payload_bytes_left_q <= 8'd0;
+                stream_tx_kind_q          <= STREAM_TX_NONE;
+                stream_pending_kind_q     <= STREAM_TX_NONE;
+                quiesce_active_q          <= 1'b1;
+                quiesce_count_q           <= 3'd0;
+                drain_committed_q         <= 1'b0;
+            end else begin
+                axis_soft_reset_q <= 1'b0;
+            end
+
+            if (quiesce_active_q) begin
+                if (quiesce_count_q < QUIESCE_CYCLES) begin
+                    quiesce_count_q <= quiesce_count_q + 3'd1;
+                end else if (tx_owner_q == TX_OWNER_NONE && !drain_committed_q) begin
+                    fatal_tx_active_q <= 1'b1;
+                    fatal_tx_idx_q    <= 2'd0;
+                    tx_owner_q        <= TX_OWNER_FATAL;
+                    drain_committed_q <= 1'b1;
+                    quiesce_active_q  <= 1'b0;
+                end
+            end
+
+            if (tx_owner_q == TX_OWNER_FATAL && tx_fire_w) begin
+                if (fatal_tx_idx_q == fatal_tx_last_idx(fatal_code_q)) begin
+                    fatal_tx_active_q <= 1'b0;
+                    fatal_tx_idx_q    <= 2'd0;
+                    tx_owner_q        <= TX_OWNER_NONE;
+                    fatal_pending_q   <= 1'b0;
+                    fatal_code_q      <= 8'd0;
+                    drain_committed_q <= 1'b0;
+                    quiesce_count_q   <= 3'd0;
+                end else begin
+                    fatal_tx_idx_q <= fatal_tx_idx_q + 2'd1;
+                end
+            end
+
             acl_cfg_valid_q   <= 1'b0;
             acl_cfg_index_q   <= 3'd0;
             acl_cfg_key_q     <= 8'd0;
             axis_in_pending_clear_q <= 1'b0;
-            axis_soft_reset_q       <= 1'b0;
 
             if (pmu_count_enable_w) begin
                 pmu_global_cycles_q <= pmu_global_cycles_q + 64'd1;
@@ -1062,6 +1198,43 @@ module contest_uart_crypto_probe #(
                 if (pmu_stream_credit_block_w) begin
                     pmu_stream_credit_block_cycles_q <= pmu_stream_credit_block_cycles_q + 64'd1;
                 end
+            end
+
+            if (acl_in_valid_q && acl_frame_stream_q) begin
+                pmu_stream_bytes_in_q <= pmu_stream_bytes_in_q + 64'd1;
+            end
+
+            if ((tx_owner_q == TX_OWNER_STREAM) && tx_fire_w &&
+                !stream_tx_active_w && (stream_payload_bytes_left_q != 8'd0)) begin
+                pmu_stream_bytes_out_q <= pmu_stream_bytes_out_q + 64'd1;
+            end
+
+            if (stream_last_fire_w && !stream_tx_active_w) begin
+                pmu_stream_chunk_count_q <= pmu_stream_chunk_count_q + 64'd1;
+            end
+
+            if (stream_session_active_q && !fatal_pending_q) begin
+                stream_wdg_counter_q <= stream_wdg_counter_q + 32'd1;
+                if (stream_wdg_counter_q == 32'(STREAM_WDG_TIMEOUT - 1)) begin
+                    fatal_pending_q <= 1'b1;
+                    fatal_code_q <= FATAL_STREAM_WATCHDOG;
+                end
+            end else begin
+                stream_wdg_counter_q <= 32'd0;
+            end
+
+            if ((stream_tx_kind_q == STREAM_TX_CIPHER_HDR) && tx_fire_w) begin
+                stream_wdg_counter_q <= 32'd0;
+            end
+
+            if (pmu_crypto_active_w && !fatal_pending_q) begin
+                crypto_wdg_counter_q <= crypto_wdg_counter_q + 32'd1;
+                if (crypto_wdg_counter_q == 32'(CRYPTO_WDG_TIMEOUT - 1)) begin
+                    fatal_pending_q <= 1'b1;
+                    fatal_code_q <= FATAL_CRYPTO_WATCHDOG;
+                end
+            end else begin
+                crypto_wdg_counter_q <= 32'd0;
             end
 
             if ((stream_tx_kind_q == STREAM_TX_NONE) &&
@@ -1088,10 +1261,10 @@ module contest_uart_crypto_probe #(
             if (tx_owner_q == TX_OWNER_PMU && tx_fire_w) begin
                 if (pmu_last_fire_w) begin
                     pmu_tx_kind_q <= PMU_TX_NONE;
-                    pmu_tx_idx_q  <= 6'd0;
+                    pmu_tx_idx_q  <= 7'd0;
                     tx_owner_q    <= TX_OWNER_NONE;
                 end else begin
-                    pmu_tx_idx_q <= pmu_tx_idx_q + 6'd1;
+                    pmu_tx_idx_q <= pmu_tx_idx_q + 7'd1;
                 end
             end
 
@@ -1144,12 +1317,15 @@ module contest_uart_crypto_probe #(
                 end else if (pmu_pending_q) begin
                     pmu_pending_q      <= 1'b0;
                     pmu_tx_kind_q      <= pmu_pending_kind_q;
-                    pmu_tx_idx_q       <= 6'd0;
+                    pmu_tx_idx_q       <= 7'd0;
                     pmu_tx_global_cycles_q <= pmu_snap_global_cycles_q;
                     pmu_tx_crypto_active_cycles_q <= pmu_snap_crypto_active_cycles_q;
                     pmu_tx_uart_tx_stall_cycles_q <= pmu_snap_uart_tx_stall_cycles_q;
                     pmu_tx_stream_credit_block_cycles_q <= pmu_snap_stream_credit_block_cycles_q;
                     pmu_tx_acl_block_events_q <= pmu_snap_acl_block_events_q;
+                    pmu_tx_stream_bytes_in_q <= pmu_snap_stream_bytes_in_q;
+                    pmu_tx_stream_bytes_out_q <= pmu_snap_stream_bytes_out_q;
+                    pmu_tx_stream_chunk_count_q <= pmu_snap_stream_chunk_count_q;
                     tx_owner_q         <= TX_OWNER_PMU;
                 end else if (!stream_tx_active_w &&
                              (stream_payload_bytes_left_q == 8'd0) &&
@@ -1518,6 +1694,9 @@ module contest_uart_crypto_probe #(
                     pmu_snap_uart_tx_stall_cycles_q      <= pmu_uart_tx_stall_cycles_q;
                     pmu_snap_stream_credit_block_cycles_q <= pmu_stream_credit_block_cycles_q;
                     pmu_snap_acl_block_events_q          <= pmu_acl_block_events_q;
+                    pmu_snap_stream_bytes_in_q           <= pmu_stream_bytes_in_q;
+                    pmu_snap_stream_bytes_out_q          <= pmu_stream_bytes_out_q;
+                    pmu_snap_stream_chunk_count_q        <= pmu_stream_chunk_count_q;
                     pmu_pending_q                        <= 1'b1;
                     pmu_pending_kind_q                   <= PMU_TX_SNAPSHOT;
                 end else if (((parser_payload_valid && (parser_payload_count == 8'd1) &&
@@ -1529,11 +1708,17 @@ module contest_uart_crypto_probe #(
                     pmu_uart_tx_stall_cycles_q          <= 64'd0;
                     pmu_stream_credit_block_cycles_q    <= 64'd0;
                     pmu_acl_block_events_q              <= 64'd0;
+                    pmu_stream_bytes_in_q               <= 64'd0;
+                    pmu_stream_bytes_out_q              <= 64'd0;
+                    pmu_stream_chunk_count_q            <= 64'd0;
                     pmu_snap_global_cycles_q            <= 64'd0;
                     pmu_snap_crypto_active_cycles_q     <= 64'd0;
                     pmu_snap_uart_tx_stall_cycles_q     <= 64'd0;
                     pmu_snap_stream_credit_block_cycles_q <= 64'd0;
                     pmu_snap_acl_block_events_q         <= 64'd0;
+                    pmu_snap_stream_bytes_in_q          <= 64'd0;
+                    pmu_snap_stream_bytes_out_q         <= 64'd0;
+                    pmu_snap_stream_chunk_count_q       <= 64'd0;
                     pmu_pending_q                       <= 1'b1;
                     pmu_pending_kind_q                  <= PMU_TX_CLEAR_ACK;
                 end else if (((parser_payload_valid && (parser_payload_count == 8'd1) &&

@@ -5,6 +5,7 @@ import threading
 import crypto_gateway_worker as worker_mod
 from crypto_gateway_protocol import (
     BenchResult,
+    FatalErrorResponse,
     PmuClearAck,
     PmuSnapshot,
     ProbeCase,
@@ -378,6 +379,27 @@ class GatewayWorkerTests(unittest.TestCase):
         self.assertAlmostEqual(events[0].payload["credit_block_ratio"], 0.125)
         self.assertEqual(events[0].payload["acl_block_events"], 2)
 
+    def test_handle_case_emits_fatal_error_event(self) -> None:
+        worker = worker_mod.GatewayWorker()
+        fake_serial = mock.Mock()
+        worker._serial = fake_serial
+
+        case = case_query_pmu()
+        result = ProbeResult(
+            case=case,
+            rx=bytes([0x55, 0x02, 0xEE, 0x01]),
+            passed=False,
+            duration_s=0.001,
+            fatal_error=FatalErrorResponse(code=0x01),
+        )
+
+        with mock.patch.object(worker_mod, "run_host_case_on_serial", return_value=result):
+            worker._handle_case(case, 3.0)
+
+        events = worker.poll_events(2)
+        self.assertEqual([event.kind for event in events], ["fatal_error"])
+        self.assertEqual(events[0].payload["code"], 0x01)
+
     def test_handle_case_emits_pmu_cleared_event(self) -> None:
         worker = worker_mod.GatewayWorker()
         fake_serial = mock.Mock()
@@ -545,6 +567,62 @@ class GatewayWorkerTests(unittest.TestCase):
             ["pmu_cleared", "file_begin", "pmu_snapshot"],
         )
         self.assertEqual(events[-1].payload["acl_block_events"], 1)
+
+    def test_handle_encrypt_file_emits_fatal_error_and_pmu_snapshot(self) -> None:
+        worker = worker_mod.GatewayWorker()
+        fake_serial = mock.Mock()
+        worker._serial = fake_serial
+        worker._connected_port = "COM12"
+        worker._connected_baud = 2_000_000
+
+        mock_input_path = mock.Mock()
+        mock_input_path.read_bytes.return_value = b"A" * 128
+        mock_input_path.name = "fatal.bin"
+        mock_input_path.__str__ = mock.Mock(return_value="fatal.bin")
+
+        pmu_snapshot = PmuSnapshot(
+            clk_hz=50_000_000,
+            global_cycles=5000,
+            crypto_active_cycles=0,
+            uart_tx_stall_cycles=250,
+            stream_credit_block_cycles=0,
+            acl_block_events=0,
+        )
+
+        def fake_run_case(ser, case, timeout_s):
+            if case.kind == "pmu_clear":
+                return ProbeResult(
+                    case=case,
+                    rx=bytes([0x55, 0x02, 0x4A, 0x00]),
+                    passed=True,
+                    duration_s=0.001,
+                    pmu_clear_ack=PmuClearAck(status=0),
+                )
+            if case.kind == "pmu_query":
+                return ProbeResult(
+                    case=case,
+                    rx=pmu_snapshot.as_bytes(),
+                    passed=True,
+                    duration_s=0.001,
+                    pmu_snapshot=pmu_snapshot,
+                )
+            raise AssertionError(f"unexpected probe kind: {case.kind}")
+
+        with mock.patch.object(worker_mod, "Path", return_value=mock_input_path):
+            with mock.patch.object(worker_mod, "run_case_on_serial", side_effect=fake_run_case):
+                with mock.patch.object(
+                    worker_mod,
+                    "stream_encrypt_file_v3_on_serial",
+                    side_effect=worker_mod.HardwareFatalError(0x01),
+                ):
+                    worker._handle_encrypt_file("fatal.bin", "SM4", 3.0)
+
+        events = worker.poll_events(8)
+        self.assertEqual(
+            [event.kind for event in events],
+            ["pmu_cleared", "file_begin", "fatal_error", "pmu_snapshot"],
+        )
+        self.assertEqual(events[2].payload["code"], 0x01)
 
     def test_stream_encrypt_file_v3_on_serial_times_out_when_rx_stalls(self) -> None:
         def on_write(fake_serial: FakeStreamSerial, data: bytes) -> None:
