@@ -61,13 +61,13 @@ def _print_bench_result(result: BenchResult, snapshot: PmuSnapshot | None = None
         mbps = result.effective_mbps(snapshot.clk_hz)
         if mbps is not None:
             print(f"[BENCH_RATE] effective_mbps={mbps:.3f} clk_hz={snapshot.clk_hz}")
-    print(
-        "[PMU_RATIO] "
-        f"hw_util={snapshot.crypto_utilization:.4f} "
-        f"uart_stall={snapshot.uart_stall_ratio:.4f} "
-        f"credit_block={snapshot.credit_block_ratio:.4f} "
-        f"elapsed_ms={snapshot.elapsed_ms_from_hw:.3f}"
-    )
+        print(
+            "[PMU_RATIO] "
+            f"hw_util={snapshot.crypto_utilization:.4f} "
+            f"uart_stall={snapshot.uart_stall_ratio:.4f} "
+            f"credit_block={snapshot.credit_block_ratio:.4f} "
+            f"elapsed_ms={snapshot.elapsed_ms_from_hw:.3f}"
+        )
 
 
 def main() -> int:
@@ -160,6 +160,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--algo",
+        type=str.lower,
         choices=("sm4", "aes"),
         help="Algorithm for --run-onchip-bench or --force-run-onchip-bench",
     )

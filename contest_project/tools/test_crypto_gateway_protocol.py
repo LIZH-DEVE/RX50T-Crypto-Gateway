@@ -467,6 +467,137 @@ class CryptoGatewayProtocolTests(unittest.TestCase):
         self.assertEqual(args[2], 3.0)
         self.assertEqual(kwargs["baud"], 2_000_000)
 
+    def test_cli_run_onchip_bench_accepts_uppercase_algo(self) -> None:
+        serial_port = mock.MagicMock()
+        serial_ctx = mock.MagicMock()
+        serial_ctx.__enter__.return_value = serial_port
+        serial_ctx.__exit__.return_value = False
+        bench_result = self._sample_bench_result(0x53)
+        pmu_snapshot = self._sample_pmu_snapshot()
+
+        with mock.patch.object(cli.serial, "Serial", return_value=serial_ctx):
+            with mock.patch.object(
+                cli,
+                "run_host_case_on_serial",
+                return_value=ProbeResult(
+                    case=case_run_onchip_bench("SM4"),
+                    rx=bench_result.as_bytes(),
+                    passed=True,
+                    duration_s=0.001,
+                    bench_result=bench_result,
+                ),
+            ) as host_run:
+                with mock.patch.object(
+                    cli,
+                    "run_case_on_serial",
+                    return_value=ProbeResult(
+                        case=case_query_pmu(),
+                        rx=pmu_snapshot.as_bytes(),
+                        passed=True,
+                        duration_s=0.001,
+                        pmu_snapshot=pmu_snapshot,
+                    ),
+                ):
+                    with mock.patch("builtins.print"):
+                        with mock.patch.object(
+                            sys,
+                            "argv",
+                            [
+                                "send_rx50t_crypto_probe.py",
+                                "--port",
+                                "COM12",
+                                "--baud",
+                                "2000000",
+                                "--run-onchip-bench",
+                                "--algo",
+                                "SM4",
+                            ],
+                        ):
+                            self.assertEqual(cli.main(), 0)
+
+        host_run.assert_called_once()
+        args, kwargs = host_run.call_args
+        self.assertIs(args[0], serial_port)
+        self.assertEqual(args[1].kind, "bench_run")
+        self.assertEqual(args[1].tx, case_run_onchip_bench("SM4").tx)
+        self.assertEqual(args[2], 3.0)
+        self.assertEqual(kwargs["baud"], 2_000_000)
+
+    def test_cli_query_bench_without_pmu_snapshot_does_not_crash(self) -> None:
+        serial_port = mock.MagicMock()
+        serial_ctx = mock.MagicMock()
+        serial_ctx.__enter__.return_value = serial_port
+        serial_ctx.__exit__.return_value = False
+        bench_result = BenchResult(
+            version=1,
+            status=0x04,
+            algo=0x53,
+            byte_count=0,
+            cycles=0,
+            crc32=0,
+        )
+
+        with mock.patch.object(cli.serial, "Serial", return_value=serial_ctx):
+            with mock.patch.object(
+                cli,
+                "run_host_case_on_serial",
+                return_value=ProbeResult(
+                    case=case_query_bench_result(),
+                    rx=bench_result.as_bytes(),
+                    passed=True,
+                    duration_s=0.001,
+                    bench_result=bench_result,
+                ),
+            ):
+                with mock.patch("builtins.print"):
+                    with mock.patch.object(
+                        sys,
+                        "argv",
+                        [
+                            "send_rx50t_crypto_probe.py",
+                            "--port",
+                            "COM12",
+                            "--baud",
+                            "2000000",
+                            "--query-bench",
+                        ],
+                    ):
+                        self.assertEqual(cli.main(), 0)
+
+    def test_cli_query_bench_success_without_pmu_snapshot_does_not_crash(self) -> None:
+        serial_port = mock.MagicMock()
+        serial_ctx = mock.MagicMock()
+        serial_ctx.__enter__.return_value = serial_port
+        serial_ctx.__exit__.return_value = False
+        bench_result = self._sample_bench_result(0x41)
+
+        with mock.patch.object(cli.serial, "Serial", return_value=serial_ctx):
+            with mock.patch.object(
+                cli,
+                "run_host_case_on_serial",
+                return_value=ProbeResult(
+                    case=case_query_bench_result(),
+                    rx=bench_result.as_bytes(),
+                    passed=True,
+                    duration_s=0.001,
+                    bench_result=bench_result,
+                ),
+            ):
+                with mock.patch("builtins.print"):
+                    with mock.patch.object(
+                        sys,
+                        "argv",
+                        [
+                            "send_rx50t_crypto_probe.py",
+                            "--port",
+                            "COM12",
+                            "--baud",
+                            "2000000",
+                            "--query-bench",
+                        ],
+                    ):
+                        self.assertEqual(cli.main(), 0)
+
     def test_parse_stream_capability_response(self) -> None:
         message = parse_stream_response(bytes([0x55, 0x04, 0x57, 0x80, 0x08, 0x07]))
         self.assertEqual(message, StreamCapabilities(chunk_size=128, window=8, flags=0x07))
