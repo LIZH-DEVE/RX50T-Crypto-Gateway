@@ -4,12 +4,16 @@ import threading
 
 import crypto_gateway_worker as worker_mod
 from crypto_gateway_protocol import (
+    BenchResult,
     PmuClearAck,
     PmuSnapshot,
     ProbeCase,
     ProbeResult,
     case_clear_pmu,
+    case_force_run_onchip_bench,
+    case_query_bench_result,
     case_query_pmu,
+    case_run_onchip_bench,
 )
 
 
@@ -48,6 +52,136 @@ class FakeStreamSerial:
 
 
 class GatewayWorkerTests(unittest.TestCase):
+    def test_handle_case_emits_bench_result_and_pmu_snapshot_for_run(self) -> None:
+        worker = worker_mod.GatewayWorker()
+        fake_serial = mock.Mock()
+        worker._serial = fake_serial
+
+        bench_case = case_run_onchip_bench("SM4")
+        bench_probe = ProbeResult(
+            case=bench_case,
+            rx=bytes.fromhex(
+                "55 14 62 01 00 53 00 10 00 00 00 00 00 00 00 00 01 00 12 34 56 78"
+            ),
+            passed=True,
+            duration_s=0.001,
+            bench_result=BenchResult(
+                version=1,
+                status=0x00,
+                algo=0x53,
+                byte_count=0x0010_0000,
+                cycles=0x100,
+                crc32=0x1234_5678,
+            ),
+        )
+        pmu_snapshot = PmuSnapshot(
+            clk_hz=50_000_000,
+            global_cycles=2048,
+            crypto_active_cycles=512,
+            uart_tx_stall_cycles=256,
+            stream_credit_block_cycles=128,
+            acl_block_events=0,
+        )
+        pmu_probe = ProbeResult(
+            case=case_query_pmu(),
+            rx=pmu_snapshot.as_bytes(),
+            passed=True,
+            duration_s=0.001,
+            pmu_snapshot=pmu_snapshot,
+        )
+
+        with mock.patch.object(worker_mod, "run_host_case_on_serial", return_value=bench_probe):
+            with mock.patch.object(worker, "_query_pmu_after_session", return_value=pmu_probe):
+                worker._handle_case(bench_case, 3.0)
+
+        events = worker.poll_events(4)
+        self.assertEqual([event.kind for event in events], ["bench_result", "pmu_snapshot"])
+        self.assertEqual(events[0].payload["status"], 0x00)
+        self.assertEqual(events[0].payload["algo"], 0x53)
+        self.assertAlmostEqual(
+            events[0].payload["effective_mbps"],
+            (0x0010_0000 * 8 * 50_000_000) / 0x100 / 1_000_000.0,
+        )
+
+    def test_handle_case_emits_bench_result_only_for_query(self) -> None:
+        worker = worker_mod.GatewayWorker()
+        fake_serial = mock.Mock()
+        worker._serial = fake_serial
+
+        case = case_query_bench_result()
+        result = ProbeResult(
+            case=case,
+            rx=bytes.fromhex(
+                "55 14 62 01 04 41 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"
+            ),
+            passed=True,
+            duration_s=0.001,
+            bench_result=BenchResult(
+                version=1,
+                status=0x04,
+                algo=0x41,
+                byte_count=0,
+                cycles=0,
+                crc32=0,
+            ),
+        )
+
+        with mock.patch.object(worker_mod, "run_host_case_on_serial", return_value=result):
+            worker._handle_case(case, 3.0)
+
+        events = worker.poll_events(2)
+        self.assertEqual([event.kind for event in events], ["bench_result"])
+        self.assertEqual(events[0].payload["status"], 0x04)
+
+    def test_handle_case_uses_force_run_helper_for_force_bench(self) -> None:
+        worker = worker_mod.GatewayWorker()
+        fake_serial = mock.Mock()
+        worker._serial = fake_serial
+        worker._connected_baud = 2_000_000
+
+        force_case = case_force_run_onchip_bench("SM4")
+        bench_probe = ProbeResult(
+            case=force_case,
+            rx=bytes.fromhex(
+                "55 14 62 01 00 53 00 10 00 00 00 00 00 00 00 00 01 00 12 34 56 78"
+            ),
+            passed=True,
+            duration_s=0.001,
+            bench_result=BenchResult(
+                version=1,
+                status=0x00,
+                algo=0x53,
+                byte_count=0x0010_0000,
+                cycles=0x100,
+                crc32=0x1234_5678,
+            ),
+        )
+        pmu_snapshot = PmuSnapshot(
+            clk_hz=50_000_000,
+            global_cycles=2048,
+            crypto_active_cycles=512,
+            uart_tx_stall_cycles=256,
+            stream_credit_block_cycles=128,
+            acl_block_events=0,
+        )
+        pmu_probe = ProbeResult(
+            case=case_query_pmu(),
+            rx=pmu_snapshot.as_bytes(),
+            passed=True,
+            duration_s=0.001,
+            pmu_snapshot=pmu_snapshot,
+        )
+
+        with mock.patch.object(worker_mod, "run_host_case_on_serial", return_value=bench_probe) as host_run:
+            with mock.patch.object(worker, "_query_pmu_after_session", return_value=pmu_probe) as query_pmu:
+                worker._handle_case(force_case, 3.0)
+
+        host_run.assert_called_once_with(fake_serial, force_case, 3.0, baud=2_000_000)
+        query_pmu.assert_called_once_with(fake_serial, 3.0, emit=False)
+        events = worker.poll_events(4)
+        self.assertEqual([event.kind for event in events], ["bench_result", "pmu_snapshot"])
+        self.assertEqual(events[0].payload["algo"], 0x53)
+
     def test_connect_flushes_uart_buffers_before_emitting_connected(self) -> None:
         worker = worker_mod.GatewayWorker()
         fake_serial = mock.Mock()
@@ -232,7 +366,7 @@ class GatewayWorkerTests(unittest.TestCase):
             pmu_snapshot=snapshot,
         )
 
-        with mock.patch.object(worker_mod, "run_case_on_serial", return_value=result):
+        with mock.patch.object(worker_mod, "run_host_case_on_serial", return_value=result):
             worker._handle_case(case, 3.0)
 
         events = worker.poll_events(1)
@@ -258,7 +392,7 @@ class GatewayWorkerTests(unittest.TestCase):
             pmu_clear_ack=PmuClearAck(status=0),
         )
 
-        with mock.patch.object(worker_mod, "run_case_on_serial", return_value=result):
+        with mock.patch.object(worker_mod, "run_host_case_on_serial", return_value=result):
             worker._handle_case(case, 3.0)
 
         events = worker.poll_events(1)

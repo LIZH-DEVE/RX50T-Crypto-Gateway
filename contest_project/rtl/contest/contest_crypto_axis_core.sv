@@ -3,6 +3,7 @@
 module contest_crypto_axis_core (
     input  wire       i_clk,
     input  wire       i_rst_n,
+    input  wire       i_soft_reset,
 
     input  wire       s_axis_tvalid,
     output wire       s_axis_tready,
@@ -50,6 +51,7 @@ module contest_crypto_axis_core (
     contest_acl_axis_core u_acl_axis (
         .i_clk                 (i_clk),
         .i_rst_n               (i_rst_n),
+        .i_soft_reset          (i_soft_reset),
         .s_axis_tvalid         (s_axis_tvalid),
         .s_axis_tready         (s_axis_tready),
         .s_axis_tdata          (s_axis_tdata),
@@ -76,6 +78,7 @@ module contest_crypto_axis_core (
     contest_axis_block_packer u_packer (
         .i_clk       (i_clk),
         .i_rst_n     (i_rst_n),
+        .i_soft_reset(i_soft_reset),
         .s_axis_tvalid(acl_axis_tvalid),
         .s_axis_tready(acl_axis_tready),
         .s_axis_tdata (acl_axis_tdata),
@@ -91,6 +94,7 @@ module contest_crypto_axis_core (
     contest_crypto_block_engine u_block_engine (
         .i_clk             (i_clk),
         .i_rst_n           (i_rst_n),
+        .i_soft_reset      (i_soft_reset),
         .s_axis_tvalid     (blk_in_tvalid),
         .s_axis_tready     (blk_in_tready),
         .s_axis_tdata      (blk_in_tdata),
@@ -107,6 +111,7 @@ module contest_crypto_axis_core (
     contest_axis_block_unpacker u_unpacker (
         .i_clk       (i_clk),
         .i_rst_n     (i_rst_n),
+        .i_soft_reset(i_soft_reset),
         .s_axis_tvalid(blk_out_tvalid),
         .s_axis_tready(blk_out_tready),
         .s_axis_tdata (blk_out_tdata),

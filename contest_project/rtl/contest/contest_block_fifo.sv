@@ -7,6 +7,7 @@ module contest_block_fifo #(
 ) (
     input  wire               clk,
     input  wire               rst_n,
+    input  wire               soft_reset,
     input  wire               wr_en,
     input  wire [WIDTH-1:0]   wr_data,
     output wire               full,
@@ -55,6 +56,11 @@ module contest_block_fifo #(
 
     always @(posedge clk) begin
         if (!rst_n) begin
+            wr_ptr_q <= {ADDR_W{1'b0}};
+            rd_ptr_q <= {ADDR_W{1'b0}};
+            count_q  <= {(ADDR_W+1){1'b0}};
+            rd_valid <= 1'b0;
+        end else if (soft_reset) begin
             wr_ptr_q <= {ADDR_W{1'b0}};
             rd_ptr_q <= {ADDR_W{1'b0}};
             count_q  <= {(ADDR_W+1){1'b0}};

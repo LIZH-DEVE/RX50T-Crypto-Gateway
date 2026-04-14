@@ -3,6 +3,7 @@
 module contest_axis_block_packer (
     input  wire         i_clk,
     input  wire         i_rst_n,
+    input  wire         i_soft_reset,
 
     input  wire         s_axis_tvalid,
     output wire         s_axis_tready,
@@ -37,6 +38,13 @@ module contest_axis_block_packer (
 
     always @(posedge i_clk) begin
         if (!i_rst_n) begin
+            gather_shift_q <= 128'd0;
+            gather_count_q <= 5'd0;
+            m_axis_tvalid  <= 1'b0;
+            m_axis_tdata   <= 128'd0;
+            m_axis_tlast   <= 1'b0;
+            m_axis_tuser   <= 6'd0;
+        end else if (i_soft_reset) begin
             gather_shift_q <= 128'd0;
             gather_count_q <= 5'd0;
             m_axis_tvalid  <= 1'b0;

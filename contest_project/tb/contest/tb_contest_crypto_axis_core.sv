@@ -51,6 +51,7 @@ module tb_contest_crypto_axis_core;
     contest_crypto_axis_core dut (
         .i_clk                (clk),
         .i_rst_n              (rst_n),
+        .i_soft_reset         (1'b0),
         .s_axis_tvalid        (s_axis_tvalid),
         .s_axis_tready        (s_axis_tready),
         .s_axis_tdata         (s_axis_tdata),

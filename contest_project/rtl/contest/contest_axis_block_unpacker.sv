@@ -3,6 +3,7 @@
 module contest_axis_block_unpacker (
     input  wire         i_clk,
     input  wire         i_rst_n,
+    input  wire         i_soft_reset,
 
     input  wire         s_axis_tvalid,
     output wire         s_axis_tready,
@@ -40,6 +41,12 @@ module contest_axis_block_unpacker (
 
     always @(posedge i_clk) begin
         if (!i_rst_n) begin
+            block_data_q        <= 128'd0;
+            block_last_q        <= 1'b0;
+            block_valid_bytes_q <= 5'd0;
+            block_valid_q       <= 1'b0;
+            byte_idx_q          <= 5'd0;
+        end else if (i_soft_reset) begin
             block_data_q        <= 128'd0;
             block_last_q        <= 1'b0;
             block_valid_bytes_q <= 5'd0;

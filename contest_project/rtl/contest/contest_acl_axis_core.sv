@@ -3,6 +3,7 @@
 module contest_acl_axis_core (
     input  wire       i_clk,
     input  wire       i_rst_n,
+    input  wire       i_soft_reset,
 
     input  wire       s_axis_tvalid,
     output wire       s_axis_tready,
@@ -162,6 +163,31 @@ module contest_acl_axis_core (
 
     always @(posedge i_clk) begin
         if (!i_rst_n) begin
+            state_q                 <= ST_IDLE;
+            first_data_q            <= 8'd0;
+            first_last_q            <= 1'b0;
+            first_user_q            <= 1'b0;
+            lookup_addr_q           <= 8'd0;
+            lookup_req_q            <= 1'b0;
+            drop_slot_q             <= 3'd0;
+            cfg_state_q             <= CFG_IDLE;
+            cfg_slot_q              <= 3'd0;
+            cfg_old_key_q           <= 8'd0;
+            cfg_new_key_q           <= 8'd0;
+            mem_wr_en_q             <= 1'b0;
+            mem_wr_addr_q           <= 8'd0;
+            mem_wr_data_q           <= 1'b0;
+            m_axis_tvalid           <= 1'b0;
+            m_axis_tdata            <= 8'd0;
+            m_axis_tlast            <= 1'b0;
+            m_axis_tuser            <= 1'b0;
+            o_cfg_busy              <= 1'b0;
+            o_cfg_done              <= 1'b0;
+            o_cfg_error             <= 1'b0;
+            o_acl_block_pulse       <= 1'b0;
+            o_acl_block_slot_valid  <= 1'b0;
+            o_acl_block_slot        <= 3'd0;
+        end else if (i_soft_reset) begin
             state_q                 <= ST_IDLE;
             first_data_q            <= 8'd0;
             first_last_q            <= 1'b0;

@@ -15,6 +15,7 @@ except ImportError as exc:  # pragma: no cover
     ) from exc
 
 from crypto_gateway_protocol import (
+    BenchResult,
     StreamBlockResponse,
     StreamCipherResponse,
     StreamErrorResponse,
@@ -28,6 +29,7 @@ from crypto_gateway_protocol import (
     parse_stream_response,
     plan_file_chunks_for_transport,
     read_exact,
+    run_host_case_on_serial,
     run_case_on_serial,
 )
 
@@ -364,7 +366,7 @@ class GatewayWorker:
 
     def _handle_case(self, case, timeout_s: float) -> None:
         ser = self._ensure_serial()
-        result = run_case_on_serial(ser, case, timeout_s)
+        result = run_host_case_on_serial(ser, case, timeout_s, baud=self._connected_baud)
         if result.pmu_snapshot is not None:
             self._emit_pmu_snapshot(result)
             return
@@ -382,6 +384,18 @@ class GatewayWorker:
                 description=case.description,
                 status=result.pmu_clear_ack.status,
             )
+            return
+
+        if result.bench_result is not None:
+            pmu_result = None
+            if case.kind in {"bench_run", "bench_force"}:
+                try:
+                    pmu_result = self._query_pmu_after_session(ser, timeout_s, emit=False)
+                except Exception:
+                    pmu_result = None
+            self._emit_bench_result(result, pmu_result.pmu_snapshot if pmu_result is not None else None)
+            if pmu_result is not None:
+                self._emit_pmu_snapshot(pmu_result)
             return
 
         if result.acl_write_ack is not None:
@@ -444,6 +458,31 @@ class GatewayWorker:
             description=case.description,
         )
 
+    def _emit_bench_result(self, result, snapshot: PmuSnapshot | None = None) -> None:
+        bench = result.bench_result
+        if bench is None:
+            raise RuntimeError("missing bench result")
+        self._emit(
+            "bench_result",
+            name=result.case.name,
+            tx=result.tx,
+            rx=result.rx,
+            expected=result.expected,
+            passed=result.passed,
+            duration_s=result.duration_s,
+            throughput_mbps=result.throughput_mbps,
+            description=result.case.description,
+            version=bench.version,
+            status=bench.status,
+            status_text=bench.status_name,
+            algo=bench.algo,
+            algo_name=bench.algo_name,
+            byte_count=bench.byte_count,
+            cycles=bench.cycles,
+            crc32=bench.crc32,
+            effective_mbps=bench.effective_mbps(snapshot.clk_hz) if snapshot is not None else None,
+        )
+
     def _emit_pmu_snapshot(self, result) -> None:
         snapshot = result.pmu_snapshot
         if snapshot is None:
@@ -470,7 +509,9 @@ class GatewayWorker:
             elapsed_ms_from_hw=snapshot.elapsed_ms_from_hw,
         )
 
-    def _query_pmu_after_session(self, ser: serial.Serial, timeout_s: float) -> None:
+    def _query_pmu_after_session(
+        self, ser: serial.Serial, timeout_s: float, *, emit: bool = True
+    ):
         last_error: Exception | None = None
         for attempt in range(3):
             try:
@@ -479,8 +520,9 @@ class GatewayWorker:
                 last_error = exc
             else:
                 if result.pmu_snapshot is not None:
-                    self._emit_pmu_snapshot(result)
-                    return
+                    if emit:
+                        self._emit_pmu_snapshot(result)
+                    return result
                 last_error = RuntimeError("invalid PMU snapshot response")
 
             if attempt < 2:

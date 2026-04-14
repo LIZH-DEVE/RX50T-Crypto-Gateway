@@ -28,6 +28,8 @@ AES128_CT8 = AES128_CT4 + AES128_CT4
 SM4_PT8 = SM4_PT4 + SM4_PT4
 SM4_CT8 = SM4_CT4 + SM4_CT4
 DEFAULT_ACL_RULE_BYTES = (0x58, 0x59, 0x5A, 0x57, 0x50, 0x52, 0x54, 0x55)
+FORCE_BENCH_GUARD_BITS = 2 * 20 * 10
+MIN_FORCE_BENCH_GUARD_S = 0.001
 
 
 def display_rule_byte(value: int) -> str:
@@ -153,6 +155,47 @@ class PmuClearAck:
 
 
 @dataclass(frozen=True)
+class BenchResult:
+    version: int
+    status: int
+    algo: int
+    byte_count: int
+    cycles: int
+    crc32: int
+
+    def as_bytes(self) -> bytes:
+        payload = bytearray([0x62, self.version, self.status, self.algo])
+        payload.extend(self.byte_count.to_bytes(4, "big"))
+        payload.extend(self.cycles.to_bytes(8, "big"))
+        payload.extend(self.crc32.to_bytes(4, "big"))
+        return bytes([0x55, len(payload)]) + bytes(payload)
+
+    @property
+    def algo_name(self) -> str:
+        if self.algo == 0x41:
+            return "AES"
+        if self.algo == 0x53:
+            return "SM4"
+        return f"0x{self.algo:02X}"
+
+    @property
+    def status_name(self) -> str:
+        mapping = {
+            0x00: "SUCCESS",
+            0x01: "BUSY",
+            0x02: "TIMEOUT",
+            0x03: "INTERNAL",
+            0x04: "NO_RESULT",
+        }
+        return mapping.get(self.status, f"0x{self.status:02X}")
+
+    def effective_mbps(self, clk_hz: int) -> float | None:
+        if clk_hz <= 0 or self.cycles <= 0:
+            return None
+        return (self.byte_count * 8 * clk_hz) / self.cycles / 1_000_000.0
+
+
+@dataclass(frozen=True)
 class ProbeCase:
     name: str
     tx: bytes
@@ -160,6 +203,8 @@ class ProbeCase:
     expected: bytes | None
     description: str
     kind: str = "raw"
+    response_mode: str = "fixed"
+    response_opcode: int | None = None
 
 
 @dataclass(frozen=True)
@@ -174,6 +219,7 @@ class ProbeResult:
     acl_key_map: AclKeyMap | None = None
     pmu_snapshot: PmuSnapshot | None = None
     pmu_clear_ack: PmuClearAck | None = None
+    bench_result: BenchResult | None = None
 
     @property
     def tx(self) -> bytes:
@@ -342,6 +388,19 @@ def parse_pmu_clear_ack(raw: bytes) -> PmuClearAck:
     return PmuClearAck(status=raw[3])
 
 
+def parse_bench_result_response(raw: bytes) -> BenchResult:
+    if len(raw) != 22 or raw[:4] != bytes([0x55, 0x14, 0x62, 0x01]):
+        raise ValueError(f"invalid bench result response: {format_hex(raw)}")
+    return BenchResult(
+        version=raw[3],
+        status=raw[4],
+        algo=raw[5],
+        byte_count=int.from_bytes(raw[6:10], "big"),
+        cycles=int.from_bytes(raw[10:18], "big"),
+        crc32=int.from_bytes(raw[18:22], "big"),
+    )
+
+
 def parse_stream_response(raw: bytes) -> StreamCapabilities | StreamStartAck | StreamCipherResponse | StreamBlockResponse | StreamErrorResponse:
     if len(raw) < 3 or raw[0] != 0x55:
         raise ValueError(f"invalid stream frame: {format_hex(raw)}")
@@ -365,6 +424,21 @@ def parse_stream_response(raw: bytes) -> StreamCapabilities | StreamStartAck | S
     raise ValueError(f"unsupported stream response: {format_hex(raw)}")
 
 
+def reset_serial_buffers(ser: serial.Serial) -> None:
+    try:
+        ser.reset_input_buffer()
+        ser.reset_output_buffer()
+    except AttributeError:  # pragma: no cover - older pyserial fallback
+        ser.flushInput()
+        ser.flushOutput()
+
+
+def compute_force_guard_s(baud: int) -> float:
+    if baud <= 0:
+        raise ValueError("baud must be > 0")
+    return max(MIN_FORCE_BENCH_GUARD_S, FORCE_BENCH_GUARD_BITS / float(baud))
+
+
 def read_exact(ser: serial.Serial, expected_len: int, timeout_s: float) -> bytes:
     deadline = time.time() + timeout_s
     buf = bytearray()
@@ -373,6 +447,48 @@ def read_exact(ser: serial.Serial, expected_len: int, timeout_s: float) -> bytes
         if chunk:
             buf.extend(chunk)
     return bytes(buf)
+
+
+def _read_until_deadline(ser: serial.Serial, expected_len: int, deadline: float) -> bytes | None:
+    buf = bytearray()
+    while time.time() < deadline and len(buf) < expected_len:
+        chunk = ser.read(expected_len - len(buf))
+        if chunk:
+            buf.extend(chunk)
+    if len(buf) != expected_len:
+        return None
+    return bytes(buf)
+
+
+def read_framed_response(
+    ser: serial.Serial,
+    timeout_s: float,
+    *,
+    expected_opcode: int | None = None,
+    frame_gap_s: float = 0.05,
+) -> bytes:
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        first = ser.read(1)
+        if not first:
+            continue
+        if first != b"\x55":
+            continue
+
+        len_bytes = _read_until_deadline(ser, 1, min(deadline, time.time() + frame_gap_s))
+        if len_bytes is None:
+            continue
+        payload_len = len_bytes[0]
+        payload = _read_until_deadline(ser, payload_len, min(deadline, time.time() + frame_gap_s))
+        if payload is None:
+            continue
+
+        frame = b"\x55" + len_bytes + payload
+        if expected_opcode is not None and (payload_len == 0 or payload[0] != expected_opcode):
+            continue
+        return frame
+
+    raise RuntimeError("Timed out waiting for framed response")
 
 
 def pkcs7_pad(payload: bytes, block_size: int) -> bytes:
@@ -614,6 +730,47 @@ def case_clear_pmu(expected: PmuClearAck | None = None) -> ProbeCase:
     )
 
 
+def case_run_onchip_bench(algo: str, expected: BenchResult | None = None) -> ProbeCase:
+    algo_tag = _normalize_algo_tag(algo)
+    return ProbeCase(
+        name=f"Run On-Chip Bench ({algo.strip().upper()})",
+        tx=build_frame(bytes([0x62, algo_tag])),
+        response_len=22,
+        expected=expected.as_bytes() if expected else None,
+        description=f"Run 1MiB on-chip AXIS benchmark with {algo.strip().upper()}",
+        kind="bench_run",
+        response_mode="framed",
+        response_opcode=0x62,
+    )
+
+
+def case_force_run_onchip_bench(algo: str, expected: BenchResult | None = None) -> ProbeCase:
+    algo_tag = _normalize_algo_tag(algo)
+    return ProbeCase(
+        name=f"Force Run On-Chip Bench ({algo.strip().upper()})",
+        tx=build_frame(bytes([0x62, 0xFF, algo_tag])),
+        response_len=22,
+        expected=expected.as_bytes() if expected else None,
+        description=f"Force-reset datapath, then run 1MiB on-chip AXIS benchmark with {algo.strip().upper()}",
+        kind="bench_force",
+        response_mode="framed",
+        response_opcode=0x62,
+    )
+
+
+def case_query_bench_result(expected: BenchResult | None = None) -> ProbeCase:
+    return ProbeCase(
+        name="Query Bench Result",
+        tx=build_frame(bytes([0x62])),
+        response_len=22,
+        expected=expected.as_bytes() if expected else None,
+        description="Read the latest on-chip AXIS benchmark result",
+        kind="bench_query",
+        response_mode="framed",
+        response_opcode=0x62,
+    )
+
+
 def case_encrypt_block(algo: str, plaintext: bytes) -> ProbeCase:
     normalized = algo.strip().upper()
     if normalized not in {"AES", "SM4"}:
@@ -638,12 +795,14 @@ def run_case_on_serial(
     case: ProbeCase,
     timeout_s: float = 3.0,
 ) -> ProbeResult:
-    ser.reset_input_buffer()
-    ser.reset_output_buffer()
+    reset_serial_buffers(ser)
     started = time.perf_counter()
     ser.write(case.tx)
     ser.flush()
-    rx = read_exact(ser, case.response_len, timeout_s)
+    if case.response_mode == "framed":
+        rx = read_framed_response(ser, timeout_s, expected_opcode=case.response_opcode)
+    else:
+        rx = read_exact(ser, case.response_len, timeout_s)
     duration_s = max(time.perf_counter() - started, 1e-9)
 
     stats = None
@@ -652,6 +811,7 @@ def run_case_on_serial(
     acl_key_map = None
     pmu_snapshot = None
     pmu_clear_ack = None
+    bench_result = None
     passed = False
     if case.kind == "stats":
         try:
@@ -689,6 +849,12 @@ def run_case_on_serial(
             passed = case.expected is None or rx == case.expected
         except ValueError:
             passed = False
+    elif case.kind in {"bench_run", "bench_force", "bench_query"}:
+        try:
+            bench_result = parse_bench_result_response(rx)
+            passed = case.expected is None or rx == case.expected
+        except ValueError:
+            passed = False
     else:
         passed = case.expected is None or rx == case.expected
 
@@ -703,4 +869,21 @@ def run_case_on_serial(
         acl_key_map=acl_key_map,
         pmu_snapshot=pmu_snapshot,
         pmu_clear_ack=pmu_clear_ack,
+        bench_result=bench_result,
     )
+
+
+def run_host_case_on_serial(
+    ser: serial.Serial,
+    case: ProbeCase,
+    timeout_s: float = 3.0,
+    *,
+    baud: int | None = None,
+    sleep_fn=time.sleep,
+) -> ProbeResult:
+    if case.kind == "bench_force":
+        if baud is None:
+            raise ValueError("baud is required for force bench runs")
+        sleep_fn(compute_force_guard_s(int(baud)))
+        reset_serial_buffers(ser)
+    return run_case_on_serial(ser, case, timeout_s)

@@ -1,12 +1,19 @@
 import unittest
+from unittest import mock
+import sys
 
+import crypto_gateway_protocol as proto
+import send_rx50t_crypto_probe as cli
 from crypto_gateway_protocol import (
     AclKeyMap,
     AclRuleCounters,
     AclWriteAck,
+    BenchResult,
     FileChunkPlan,
     PmuClearAck,
     PmuSnapshot,
+    ProbeCase,
+    ProbeResult,
     StatsCounters,
     StreamBlockResponse,
     StreamCapabilities,
@@ -15,10 +22,13 @@ from crypto_gateway_protocol import (
     StreamStartAck,
     build_frame,
     case_clear_pmu,
+    case_force_run_onchip_bench,
+    case_query_bench_result,
     build_stream_capability_query,
     build_stream_chunk_frame,
     build_stream_start_frame,
     case_query_pmu,
+    case_run_onchip_bench,
     case_acl_write,
     case_aes_eight_block_vector,
     case_aes_four_block_vector,
@@ -33,6 +43,7 @@ from crypto_gateway_protocol import (
     pkcs7_pad,
     parse_acl_key_map_response,
     parse_acl_write_ack,
+    parse_bench_result_response,
     parse_pmu_clear_ack,
     parse_pmu_snapshot_response,
     parse_rule_byte_input,
@@ -40,11 +51,83 @@ from crypto_gateway_protocol import (
     parse_stats_response,
     parse_stream_response,
     plan_file_chunks_for_transport,
+    run_case_on_serial,
     split_blocks_for_transport,
 )
 
 
+class FakeSerial:
+    def __init__(self, response: bytes) -> None:
+        self._response = bytearray(response)
+        self.reset_input_buffer = mock.Mock()
+        self.reset_output_buffer = mock.Mock()
+        self.flush = mock.Mock()
+        self.writes: list[bytes] = []
+
+    def write(self, data: bytes) -> int:
+        self.writes.append(bytes(data))
+        return len(data)
+
+    def read(self, size: int) -> bytes:
+        if not self._response:
+            return b""
+        chunk = bytes(self._response[:size])
+        del self._response[:size]
+        return chunk
+
+
+class CallbackSerial:
+    def __init__(self, on_write) -> None:
+        self._on_write = on_write
+        self._response = bytearray()
+        self.flush = mock.Mock()
+        self.writes: list[bytes] = []
+        self.reset_input_buffer = mock.Mock(side_effect=self._clear_input)
+        self.reset_output_buffer = mock.Mock()
+
+    def _clear_input(self) -> None:
+        self._response.clear()
+
+    def queue_rx(self, data: bytes) -> None:
+        self._response.extend(data)
+
+    def write(self, data: bytes) -> int:
+        payload = bytes(data)
+        self.writes.append(payload)
+        self._on_write(self, payload)
+        return len(payload)
+
+    def read(self, size: int) -> bytes:
+        if not self._response:
+            return b""
+        chunk = bytes(self._response[:size])
+        del self._response[:size]
+        return chunk
+
+
 class CryptoGatewayProtocolTests(unittest.TestCase):
+    @staticmethod
+    def _sample_bench_result(algo: int = 0x53) -> BenchResult:
+        return BenchResult(
+            version=1,
+            status=0x00,
+            algo=algo,
+            byte_count=0x0010_0000,
+            cycles=0x100,
+            crc32=0x1234_5678,
+        )
+
+    @staticmethod
+    def _sample_pmu_snapshot() -> PmuSnapshot:
+        return PmuSnapshot(
+            clk_hz=50_000_000,
+            global_cycles=2048,
+            crypto_active_cycles=512,
+            uart_tx_stall_cycles=256,
+            stream_credit_block_cycles=128,
+            acl_block_events=0,
+        )
+
     def test_build_frame_wraps_payload(self) -> None:
         self.assertEqual(build_frame(b"\xAA\xBB"), bytes([0x55, 0x02, 0xAA, 0xBB]))
 
@@ -94,6 +177,27 @@ class CryptoGatewayProtocolTests(unittest.TestCase):
         case = case_clear_pmu()
         self.assertEqual(case.tx, bytes([0x55, 0x01, 0x4A]))
         self.assertEqual(case.response_len, 4)
+
+    def test_case_run_onchip_bench_builds_control_frame(self) -> None:
+        case = case_run_onchip_bench("SM4")
+        self.assertEqual(case.tx, bytes([0x55, 0x02, 0x62, 0x53]))
+        self.assertEqual(case.response_len, 22)
+
+    def test_case_force_run_onchip_bench_builds_force_control_frame(self) -> None:
+        case = case_force_run_onchip_bench("AES")
+        self.assertEqual(case.tx, bytes([0x55, 0x03, 0x62, 0xFF, 0x41]))
+        self.assertEqual(case.response_len, 22)
+
+    def test_force_guard_seconds_clamps_to_one_ms_at_two_mbaud(self) -> None:
+        self.assertEqual(proto.compute_force_guard_s(2_000_000), 0.001)
+
+    def test_force_guard_seconds_scales_with_baud_when_line_is_slower(self) -> None:
+        self.assertAlmostEqual(proto.compute_force_guard_s(115_200), (2 * 20 * 10) / 115_200)
+
+    def test_case_query_bench_result_builds_query_frame(self) -> None:
+        case = case_query_bench_result()
+        self.assertEqual(case.tx, bytes([0x55, 0x01, 0x62]))
+        self.assertEqual(case.response_len, 22)
 
     def test_build_stream_capability_query(self) -> None:
         self.assertEqual(build_stream_capability_query(), bytes([0x55, 0x01, 0x57]))
@@ -152,6 +256,216 @@ class CryptoGatewayProtocolTests(unittest.TestCase):
     def test_parse_pmu_clear_ack(self) -> None:
         ack = parse_pmu_clear_ack(bytes([0x55, 0x02, 0x4A, 0x00]))
         self.assertEqual(ack, PmuClearAck(status=0))
+
+    def test_parse_bench_result_response(self) -> None:
+        result = parse_bench_result_response(
+            bytes.fromhex(
+                "55 14 62 01"
+                " 00 53"
+                " 00 10 00 00"
+                " 00 00 00 00 00 00 01 00"
+                " 12 34 56 78"
+            )
+        )
+        self.assertEqual(
+            result,
+            BenchResult(
+                version=1,
+                status=0x00,
+                algo=0x53,
+                byte_count=0x0010_0000,
+                cycles=0x100,
+                crc32=0x1234_5678,
+            ),
+        )
+
+    def test_run_case_on_serial_resyncs_to_framed_bench_response(self) -> None:
+        case = case_force_run_onchip_bench("SM4")
+        ser = FakeSerial(
+            bytes.fromhex(
+                "00 FF 7E"
+                " 55 14 62 01"
+                " 00 53"
+                " 00 10 00 00"
+                " 00 00 00 00 00 00 01 00"
+                " 12 34 56 78"
+            )
+        )
+        result = run_case_on_serial(ser, case, 3.0)
+        self.assertTrue(result.passed)
+        self.assertEqual(
+            result.bench_result,
+            BenchResult(
+                version=1,
+                status=0x00,
+                algo=0x53,
+                byte_count=0x0010_0000,
+                cycles=0x100,
+                crc32=0x1234_5678,
+            ),
+        )
+
+    def test_run_case_on_serial_treats_no_result_bench_status_as_valid_protocol(self) -> None:
+        case = case_query_bench_result()
+        ser = FakeSerial(
+            bytes.fromhex(
+                "55 14 62 01"
+                " 04 41"
+                " 00 00 00 00"
+                " 00 00 00 00 00 00 00 00"
+                " 00 00 00 00"
+            )
+        )
+        result = run_case_on_serial(ser, case, 3.0)
+        self.assertTrue(result.passed)
+        self.assertEqual(result.bench_result.status, 0x04)
+
+    def test_run_host_case_on_serial_sleeps_and_resets_before_force_bench_dispatch(self) -> None:
+        events: list[tuple[str, float | str | None]] = []
+        ser = mock.Mock()
+        ser.reset_input_buffer.side_effect = lambda: events.append(("reset_in", None))
+        ser.reset_output_buffer.side_effect = lambda: events.append(("reset_out", None))
+
+        bench_probe = ProbeResult(
+            case=case_force_run_onchip_bench("AES"),
+            rx=self._sample_bench_result(0x41).as_bytes(),
+            passed=True,
+            duration_s=0.001,
+            bench_result=self._sample_bench_result(0x41),
+        )
+
+        with mock.patch.object(
+            proto,
+            "run_case_on_serial",
+            side_effect=lambda serial_obj, case, timeout_s: (
+                events.append(("dispatch", case.name)) or bench_probe
+            ),
+        ):
+            result = proto.run_host_case_on_serial(
+                ser,
+                case_force_run_onchip_bench("AES"),
+                3.0,
+                baud=2_000_000,
+                sleep_fn=lambda seconds: events.append(("sleep", seconds)),
+            )
+
+        self.assertIs(result, bench_probe)
+        self.assertEqual(
+            events,
+            [
+                ("sleep", 0.001),
+                ("reset_in", None),
+                ("reset_out", None),
+                ("dispatch", "Force Run On-Chip Bench (AES)"),
+            ],
+        )
+
+    def test_query_bench_followed_by_pmu_query_discards_stale_bench_frame(self) -> None:
+        bench_case = case_query_bench_result()
+        pmu_case = case_query_pmu()
+        bench_frame = self._sample_bench_result().as_bytes()
+        pmu_snapshot = self._sample_pmu_snapshot()
+
+        def on_write(fake_serial: CallbackSerial, payload: bytes) -> None:
+            if payload == bench_case.tx:
+                fake_serial.queue_rx(bench_frame + bench_frame)
+            elif payload == pmu_case.tx:
+                fake_serial.queue_rx(pmu_snapshot.as_bytes())
+            else:
+                raise AssertionError(f"unexpected write: {payload.hex(' ')}")
+
+        ser = CallbackSerial(on_write)
+        bench_result = run_case_on_serial(ser, bench_case, 3.0)
+        pmu_result = run_case_on_serial(ser, pmu_case, 3.0)
+
+        self.assertTrue(bench_result.passed)
+        self.assertIsNotNone(bench_result.bench_result)
+        self.assertEqual(pmu_result.pmu_snapshot, pmu_snapshot)
+        self.assertEqual(ser.writes, [bench_case.tx, pmu_case.tx])
+
+    def test_force_bench_followed_by_pmu_query_discards_stale_bench_frame(self) -> None:
+        force_case = case_force_run_onchip_bench("SM4")
+        pmu_case = case_query_pmu()
+        bench_frame = self._sample_bench_result().as_bytes()
+        pmu_snapshot = self._sample_pmu_snapshot()
+
+        def on_write(fake_serial: CallbackSerial, payload: bytes) -> None:
+            if payload == force_case.tx:
+                fake_serial.queue_rx(bench_frame + bench_frame)
+            elif payload == pmu_case.tx:
+                fake_serial.queue_rx(pmu_snapshot.as_bytes())
+            else:
+                raise AssertionError(f"unexpected write: {payload.hex(' ')}")
+
+        ser = CallbackSerial(on_write)
+        bench_result = proto.run_host_case_on_serial(
+            ser,
+            force_case,
+            3.0,
+            baud=2_000_000,
+            sleep_fn=lambda _seconds: None,
+        )
+        pmu_result = run_case_on_serial(ser, pmu_case, 3.0)
+
+        self.assertTrue(bench_result.passed)
+        self.assertIsNotNone(bench_result.bench_result)
+        self.assertEqual(pmu_result.pmu_snapshot, pmu_snapshot)
+        self.assertEqual(ser.writes, [force_case.tx, pmu_case.tx])
+
+    def test_cli_force_run_uses_host_helper_with_baud(self) -> None:
+        serial_port = mock.MagicMock()
+        serial_ctx = mock.MagicMock()
+        serial_ctx.__enter__.return_value = serial_port
+        serial_ctx.__exit__.return_value = False
+        bench_result = self._sample_bench_result(0x41)
+        pmu_snapshot = self._sample_pmu_snapshot()
+
+        with mock.patch.object(cli.serial, "Serial", return_value=serial_ctx):
+            with mock.patch.object(
+                cli,
+                "run_host_case_on_serial",
+                return_value=ProbeResult(
+                    case=case_force_run_onchip_bench("AES"),
+                    rx=bench_result.as_bytes(),
+                    passed=True,
+                    duration_s=0.001,
+                    bench_result=bench_result,
+                ),
+            ) as host_run:
+                with mock.patch.object(
+                    cli,
+                    "run_case_on_serial",
+                    return_value=ProbeResult(
+                        case=case_query_pmu(),
+                        rx=pmu_snapshot.as_bytes(),
+                        passed=True,
+                        duration_s=0.001,
+                        pmu_snapshot=pmu_snapshot,
+                    ),
+                ):
+                    with mock.patch("builtins.print"):
+                        with mock.patch.object(
+                            sys,
+                            "argv",
+                            [
+                                "send_rx50t_crypto_probe.py",
+                                "--port",
+                                "COM12",
+                                "--baud",
+                                "2000000",
+                                "--force-run-onchip-bench",
+                                "--algo",
+                                "aes",
+                            ],
+                        ):
+                            self.assertEqual(cli.main(), 0)
+
+        host_run.assert_called_once()
+        args, kwargs = host_run.call_args
+        self.assertIs(args[0], serial_port)
+        self.assertEqual(args[1].kind, "bench_force")
+        self.assertEqual(args[2], 3.0)
+        self.assertEqual(kwargs["baud"], 2_000_000)
 
     def test_parse_stream_capability_response(self) -> None:
         message = parse_stream_response(bytes([0x55, 0x04, 0x57, 0x80, 0x08, 0x07]))

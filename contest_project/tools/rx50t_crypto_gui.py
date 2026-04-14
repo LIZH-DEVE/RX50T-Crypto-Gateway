@@ -18,10 +18,13 @@ from crypto_gateway_protocol import (
     case_aes_two_block_vector,
     case_block_ascii,
     case_invalid_selector,
+    case_force_run_onchip_bench,
     case_query_acl_keys,
+    case_query_bench_result,
     case_query_pmu,
     case_query_rule_stats,
     case_query_stats,
+    case_run_onchip_bench,
     case_clear_pmu,
     case_sm4_eight_block_vector,
     case_sm4_four_block_vector,
@@ -53,6 +56,7 @@ class CryptoGatewayApp(tk.Tk):
         self.deploy_rule_slot = tk.IntVar(value=0)
         self.deploy_rule_key = tk.StringVar(value="Q")
         self.file_algo = tk.StringVar(value="SM4")
+        self.bench_algo = tk.StringVar(value="SM4")
         self.connection_state = tk.StringVar(value="Disconnected")
         self.throughput_label = tk.StringVar(value="0.000 Mbps")
         self.last_latency_label = tk.StringVar(value="-")
@@ -63,6 +67,12 @@ class CryptoGatewayApp(tk.Tk):
             "uart_stall": tk.StringVar(value="0.0%"),
             "credit_block": tk.StringVar(value="0.0%"),
             "acl_events": tk.StringVar(value="0"),
+        }
+        self.bench_vars = {
+            "status": tk.StringVar(value="-"),
+            "mbps": tk.StringVar(value="-"),
+            "cycles": tk.StringVar(value="-"),
+            "crc32": tk.StringVar(value="-"),
         }
         self.rule_refresh_job: str | None = None
         self.file_name_text = tk.StringVar(value="No file queued")
@@ -599,6 +609,67 @@ class CryptoGatewayApp(tk.Tk):
                 anchor="w",
             ).grid(row=0, column=idx * 2 + 1, sticky="w")
 
+        self.bench_panel = tk.Frame(quick_panel, bg=self.colors["panel_bg"])
+        self.bench_panel.pack(fill="x", pady=(10, 0))
+        for col in range(8):
+            self.bench_panel.columnconfigure(col, weight=1 if col in (1, 4, 5, 6, 7) else 0)
+        tk.Label(
+            self.bench_panel,
+            text="ON-CHIP BENCHMARK",
+            bg=self.colors["panel_bg"],
+            fg="#facc15",
+            font=("Segoe UI", 10, "bold"),
+            anchor="w",
+        ).grid(row=0, column=0, columnspan=8, sticky="w", pady=(0, 6))
+        tk.Label(
+            self.bench_panel,
+            text="Algo",
+            bg=self.colors["panel_bg"],
+            fg=self.colors["muted"],
+            anchor="w",
+        ).grid(row=1, column=0, sticky="w", padx=(0, 10))
+        ttk.Combobox(
+            self.bench_panel,
+            textvariable=self.bench_algo,
+            values=("SM4", "AES"),
+            state="readonly",
+            width=6,
+            style="Dark.TCombobox",
+        ).grid(row=1, column=1, sticky="ew", padx=(0, 10))
+        self._make_action_button(self.bench_panel, "Run Bench", self._run_bench).grid(
+            row=1, column=2, sticky="ew", padx=(0, 8)
+        )
+        self._make_action_button(self.bench_panel, "Force Run", self._force_run_bench).grid(
+            row=1, column=3, sticky="ew", padx=(0, 8)
+        )
+        self._make_action_button(self.bench_panel, "Read Result", self._read_bench_result).grid(
+            row=1, column=4, sticky="ew", padx=(0, 8)
+        )
+        for idx, (label, key, color) in enumerate(
+            [
+                ("Status", "status", "#facc15"),
+                ("Effective Mbps", "mbps", "#93c5fd"),
+                ("Cycles", "cycles", "#fda4af"),
+                ("CRC32", "crc32", "#86efac"),
+            ]
+        ):
+            tk.Label(
+                self.bench_panel,
+                text=label.upper(),
+                bg=self.colors["panel_bg"],
+                fg=color,
+                font=("Segoe UI", 7, "bold"),
+                anchor="w",
+            ).grid(row=2, column=idx * 2, sticky="w", padx=(0, 4) if idx == 0 else (8, 4), pady=(8, 0))
+            tk.Label(
+                self.bench_panel,
+                textvariable=self.bench_vars[key],
+                bg=self.colors["panel_bg"],
+                fg=self.colors["text"],
+                font=("Consolas", 9, "bold"),
+                anchor="w",
+            ).grid(row=2, column=idx * 2 + 1, sticky="w", pady=(8, 0))
+
         self.live_log_zone = self._make_panel(self.aux_zone)
         self.live_log_zone.grid(row=1, column=0, sticky="nsew")
         self._section_heading(self.live_log_zone, "LIVE LOG AREA")
@@ -842,6 +913,23 @@ class CryptoGatewayApp(tk.Tk):
         self._append_log("Queued: Query PMU")
         self._set_banner("Queued PMU snapshot readback.", "info")
 
+    def _run_bench(self) -> None:
+        case = case_run_onchip_bench(self.bench_algo.get())
+        self.worker.submit_case(case)
+        self._append_log(f"Queued: {case.name}")
+        self._set_banner(f"Queued on-chip benchmark via {self.bench_algo.get()}.", "warn")
+
+    def _force_run_bench(self) -> None:
+        case = case_force_run_onchip_bench(self.bench_algo.get())
+        self.worker.submit_case(case)
+        self._append_log(f"Queued: {case.name}")
+        self._set_banner(f"Queued force benchmark via {self.bench_algo.get()}.", "warn")
+
+    def _read_bench_result(self) -> None:
+        self.worker.submit_case(case_query_bench_result())
+        self._append_log("Queued: Query Bench Result")
+        self._set_banner("Queued on-chip benchmark result readback.", "info")
+
     def _send_acl_probe(self) -> None:
         text = self.acl_text.get().strip()
         if not text:
@@ -913,6 +1001,27 @@ class CryptoGatewayApp(tk.Tk):
         self.pmu_vars["uart_stall"].set(f"{float(payload['uart_stall_ratio']) * 100.0:.2f}%")
         self.pmu_vars["credit_block"].set(f"{float(payload['credit_block_ratio']) * 100.0:.2f}%")
         self.pmu_vars["acl_events"].set(str(int(payload["acl_block_events"])))
+
+    def _apply_bench_result(self, payload: dict) -> None:
+        status_value = payload.get("status_text")
+        if status_value is None:
+            status_map = {
+                0x00: "SUCCESS",
+                0x01: "BUSY",
+                0x02: "TIMEOUT",
+                0x03: "INTERNAL",
+                0x04: "NO_RESULT",
+            }
+            raw_status = payload.get("status")
+            status_value = status_map.get(raw_status, str(raw_status if raw_status is not None else "-"))
+        self.bench_vars["status"].set(str(status_value))
+        effective_mbps = payload.get("effective_mbps")
+        if effective_mbps is None:
+            self.bench_vars["mbps"].set("-")
+        else:
+            self.bench_vars["mbps"].set(f"{float(effective_mbps):.3f} Mbps")
+        self.bench_vars["cycles"].set(str(int(payload.get("cycles", 0))))
+        self.bench_vars["crc32"].set(f"0x{int(payload.get('crc32', 0)):08X}")
 
     def _draw_chart(self) -> None:
         self.chart.delete("all")
@@ -1254,6 +1363,27 @@ class CryptoGatewayApp(tk.Tk):
                 "pass" if payload["passed"] else "error",
             )
             self._set_banner("Hardware PMU counters cleared.", "pass" if payload["passed"] else "error")
+        elif kind == "bench_result":
+            self._apply_bench_result(payload)
+            self._append_log(
+                "BENCH RESULT: "
+                f"{payload.get('algo_name', payload.get('algo'))} "
+                f"{payload.get('status_text', payload.get('status'))} "
+                f"bytes={payload['byte_count']} cycles={payload['cycles']} "
+                f"crc32=0x{int(payload['crc32']):08X}",
+                "pass" if payload["passed"] else "error",
+            )
+            if payload.get("effective_mbps") is None:
+                self._set_banner(
+                    "On-chip benchmark result refreshed.",
+                    "pass" if payload["passed"] else "error",
+                )
+            else:
+                self._set_banner(
+                    f"On-chip benchmark {payload.get('algo_name', payload.get('algo'))}: "
+                    f"{float(payload['effective_mbps']):.3f} Mbps",
+                    "pass" if payload["passed"] else "error",
+                )
         elif kind == "pmu_snapshot":
             self._record_transport_activity(len(payload["rx"]), float(payload["duration_s"]))
             self._apply_pmu_snapshot(payload)

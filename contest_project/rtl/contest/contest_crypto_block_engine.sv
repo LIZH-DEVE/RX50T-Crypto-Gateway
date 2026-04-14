@@ -3,6 +3,7 @@
 module contest_crypto_block_engine (
     input  wire         i_clk,
     input  wire         i_rst_n,
+    input  wire         i_soft_reset,
 
     input  wire         s_axis_tvalid,
     output wire         s_axis_tready,
@@ -93,6 +94,7 @@ module contest_crypto_block_engine (
     ) u_ingress_fifo (
         .clk     (i_clk),
         .rst_n   (i_rst_n),
+        .soft_reset(i_soft_reset),
         .wr_en   (s_axis_tvalid && s_axis_tready),
         .wr_data ({s_axis_tuser, s_axis_tlast, s_axis_tdata}),
         .full    (ingress_full_w),
@@ -110,6 +112,7 @@ module contest_crypto_block_engine (
     ) u_egress_fifo (
         .clk     (i_clk),
         .rst_n   (i_rst_n),
+        .soft_reset(i_soft_reset),
         .wr_en   (egress_wr_en_q),
         .wr_data (egress_wr_data_q),
         .full    (egress_full_w),
@@ -152,6 +155,31 @@ module contest_crypto_block_engine (
 
     always @(posedge i_clk) begin
         if (!i_rst_n) begin
+            ingress_rd_en_q          <= 1'b0;
+            egress_wr_en_q           <= 1'b0;
+            egress_wr_data_q         <= 135'd0;
+            egress_rd_en_q           <= 1'b0;
+            ingress_fetch_pending_q  <= 1'b0;
+            egress_fetch_pending_q   <= 1'b0;
+            crypto_block_q           <= 128'd0;
+            worker_user_q            <= 6'd0;
+            worker_last_q            <= 1'b0;
+            worker_busy_q            <= 1'b0;
+            worker_bypass_q          <= 1'b0;
+            active_algo_q            <= ALG_SM4;
+            sm4_key_sent_q           <= 1'b0;
+            sm4_user_key_valid_q     <= 1'b0;
+            sm4_start_seen_q         <= 1'b0;
+            sm4_wait_done_clear_q    <= 1'b0;
+            sm4_valid_burst_q        <= 3'd0;
+            aes_state_q              <= AES_BOOT_INIT;
+            aes_init_q               <= 1'b0;
+            aes_next_q               <= 1'b0;
+            m_axis_tvalid            <= 1'b0;
+            m_axis_tdata             <= 128'd0;
+            m_axis_tlast             <= 1'b0;
+            m_axis_tuser             <= 6'd0;
+        end else if (i_soft_reset) begin
             ingress_rd_en_q          <= 1'b0;
             egress_wr_en_q           <= 1'b0;
             egress_wr_data_q         <= 135'd0;

@@ -10,6 +10,7 @@ except ImportError as exc:  # pragma: no cover
 
 from crypto_gateway_protocol import (
     AclRuleCounters,
+    BenchResult,
     PmuSnapshot,
     StatsCounters,
     case_clear_pmu,
@@ -18,15 +19,19 @@ from crypto_gateway_protocol import (
     case_aes_known_vector,
     case_aes_two_block_vector,
     case_block_ascii,
+    case_force_run_onchip_bench,
     case_invalid_selector,
+    case_query_bench_result,
     case_query_pmu,
     case_query_rule_stats,
     case_query_stats,
+    case_run_onchip_bench,
     case_sm4_eight_block_vector,
     case_sm4_four_block_vector,
     case_sm4_known_vector,
     case_sm4_two_block_vector,
     format_hex,
+    run_host_case_on_serial,
     run_case_on_serial,
 )
 
@@ -41,6 +46,21 @@ def _print_pmu_snapshot(snapshot: PmuSnapshot) -> None:
         f"credit_block={snapshot.stream_credit_block_cycles} "
         f"acl_block_events={snapshot.acl_block_events}"
     )
+
+
+def _print_bench_result(result: BenchResult, snapshot: PmuSnapshot | None = None) -> None:
+    print(
+        "[BENCH] "
+        f"status={result.status_name} "
+        f"algo={result.algo_name} "
+        f"bytes={result.byte_count} "
+        f"cycles={result.cycles} "
+        f"crc32=0x{result.crc32:08X}"
+    )
+    if snapshot is not None:
+        mbps = result.effective_mbps(snapshot.clk_hz)
+        if mbps is not None:
+            print(f"[BENCH_RATE] effective_mbps={mbps:.3f} clk_hz={snapshot.clk_hz}")
     print(
         "[PMU_RATIO] "
         f"hw_util={snapshot.crypto_utilization:.4f} "
@@ -124,6 +144,26 @@ def main() -> int:
         help="Clear the PMU hardware counters and expect 55 02 4A 00",
     )
     parser.add_argument(
+        "--run-onchip-bench",
+        action="store_true",
+        help="Start a 1MiB on-chip AXIS benchmark session",
+    )
+    parser.add_argument(
+        "--force-run-onchip-bench",
+        action="store_true",
+        help="Soft-abort the datapath, then start a 1MiB on-chip AXIS benchmark session",
+    )
+    parser.add_argument(
+        "--query-bench",
+        action="store_true",
+        help="Query the latest on-chip AXIS benchmark result",
+    )
+    parser.add_argument(
+        "--algo",
+        choices=("sm4", "aes"),
+        help="Algorithm for --run-onchip-bench or --force-run-onchip-bench",
+    )
+    parser.add_argument(
         "--expect-stats",
         help="Expected counters as total,acl,aes,sm4,err for --query-stats, e.g. 3,1,1,1,1",
     )
@@ -151,6 +191,9 @@ def main() -> int:
             args.query_rule_stats,
             args.query_pmu,
             args.clear_pmu,
+            args.run_onchip_bench,
+            args.force_run_onchip_bench,
+            args.query_bench,
         )
         if flag
     )
@@ -160,7 +203,8 @@ def main() -> int:
             "--sm4-two-block-vector, --aes-two-block-vector, --sm4-four-block-vector, "
             "--aes-four-block-vector, --sm4-eight-block-vector, --aes-eight-block-vector, "
             "--block-ascii, --invalid-selector, "
-            "--query-stats, --query-rule-stats, --query-pmu, or --clear-pmu"
+            "--query-stats, --query-rule-stats, --query-pmu, --clear-pmu, "
+            "--run-onchip-bench, --force-run-onchip-bench, or --query-bench"
         )
 
     if args.sm4_known_vector:
@@ -211,6 +255,16 @@ def main() -> int:
         case = case_query_pmu()
     elif args.clear_pmu:
         case = case_clear_pmu()
+    elif args.run_onchip_bench:
+        if not args.algo:
+            raise SystemExit("--algo is required with --run-onchip-bench")
+        case = case_run_onchip_bench(args.algo)
+    elif args.force_run_onchip_bench:
+        if not args.algo:
+            raise SystemExit("--algo is required with --force-run-onchip-bench")
+        case = case_force_run_onchip_bench(args.algo)
+    elif args.query_bench:
+        case = case_query_bench_result()
     else:
         case = case_block_ascii(args.block_ascii)
 
@@ -223,11 +277,17 @@ def main() -> int:
         print("[EXPECT] PMU snapshot response with 5 counters + clk_hz")
     elif args.clear_pmu and case.expected is None:
         print("[EXPECT] PMU clear ACK 55 02 4A 00")
+    elif (args.run_onchip_bench or args.force_run_onchip_bench or args.query_bench) and case.expected is None:
+        print("[EXPECT] benchmark result frame 55 14 62 01 status algo bytes cycles crc32")
     else:
         print(f"[EXPECT] {format_hex(case.expected)}")
 
     with serial.Serial(args.port, args.baud, timeout=0.1) as ser:
-        result = run_case_on_serial(ser, case, args.timeout)
+        result = run_host_case_on_serial(ser, case, args.timeout, baud=args.baud)
+        bench_pmu = None
+        if result.bench_result is not None and result.bench_result.cycles > 0:
+            pmu_result = run_case_on_serial(ser, case_query_pmu(), args.timeout)
+            bench_pmu = pmu_result.pmu_snapshot
 
     print(f"[RX] {format_hex(result.rx)}")
     if args.query_stats and case.expected is None:
@@ -261,6 +321,11 @@ def main() -> int:
         if result.pmu_clear_ack is not None:
             print(f"[PMU_CLEAR] status={result.pmu_clear_ack.status}")
             print("[PASS] PMU clear ACK matched format.")
+            return 0
+    elif args.run_onchip_bench or args.force_run_onchip_bench or args.query_bench:
+        if result.bench_result is not None:
+            _print_bench_result(result.bench_result, bench_pmu)
+            print("[PASS] benchmark result response matched format.")
             return 0
     elif result.passed:
         print("[PASS] crypto probe response matched.")

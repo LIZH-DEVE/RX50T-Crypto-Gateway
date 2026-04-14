@@ -40,7 +40,7 @@ class CryptoGatewayGuiLayoutTests(unittest.TestCase):
             self.assertEqual(str(app.control_panel.grid_info()["sticky"]), "ew")
             first_rule = next(iter(app.acl_rule_cells.values()))
             self.assertLessEqual(first_rule.winfo_reqheight(), 76)
-            self.assertLessEqual(app.control_panel.winfo_reqheight(), 500)
+            self.assertLessEqual(app.control_panel.winfo_reqheight(), 620)
             self.assertGreaterEqual(app.live_log_zone.winfo_height(), 180)
             self.assertGreaterEqual(app.log_box.winfo_height(), 120)
         finally:
@@ -60,6 +60,20 @@ class CryptoGatewayGuiLayoutTests(unittest.TestCase):
         app = gui.CryptoGatewayApp()
         try:
             self.assertEqual(app.current_baud.get(), 2_000_000)
+        finally:
+            app.destroy()
+
+    def test_force_run_button_submits_force_bench_case_via_worker(self) -> None:
+        app = gui.CryptoGatewayApp()
+        try:
+            app.bench_algo.set("AES")
+            with mock.patch.object(app.worker, "submit_case") as submit_case:
+                app._force_run_bench()
+
+            submit_case.assert_called_once()
+            case = submit_case.call_args.args[0]
+            self.assertEqual(case.kind, "bench_force")
+            self.assertEqual(case.tx, bytes([0x55, 0x03, 0x62, 0xFF, 0x41]))
         finally:
             app.destroy()
 
@@ -100,6 +114,40 @@ class CryptoGatewayGuiLayoutTests(unittest.TestCase):
             self.assertEqual(app.pmu_vars["uart_stall"].get(), "0.0%")
             self.assertEqual(app.pmu_vars["credit_block"].get(), "0.0%")
             self.assertEqual(app.pmu_vars["acl_events"].get(), "0")
+        finally:
+            app.destroy()
+
+    def test_benchmark_panel_exists_and_bench_event_does_not_touch_uart_throughput(self) -> None:
+        app = gui.CryptoGatewayApp()
+        try:
+            self.assertTrue(hasattr(app, "bench_vars"))
+            self.assertTrue(hasattr(app, "bench_panel"))
+            self.assertEqual(app.pending_transport_bytes, 0)
+            self.assertEqual(app.throughput_label.get(), "0.000 Mbps")
+
+            app._handle_event(
+                gui.WorkerEvent(
+                    kind="bench_result",
+                    payload={
+                        "status": 0,
+                        "algo": 0x53,
+                        "byte_count": 1_048_576,
+                        "cycles": 65_536,
+                        "crc32": 0x12345678,
+                        "effective_mbps": 6400.0,
+                        "passed": True,
+                        "rx": bytes.fromhex("55 14 62 01"),
+                        "duration_s": 0.001,
+                    },
+                )
+            )
+
+            self.assertEqual(app.bench_vars["status"].get(), "SUCCESS")
+            self.assertEqual(app.bench_vars["mbps"].get(), "6400.000 Mbps")
+            self.assertEqual(app.bench_vars["cycles"].get(), "65536")
+            self.assertEqual(app.bench_vars["crc32"].get(), "0x12345678")
+            self.assertEqual(app.pending_transport_bytes, 0)
+            self.assertEqual(app.throughput_label.get(), "0.000 Mbps")
         finally:
             app.destroy()
 
