@@ -281,6 +281,32 @@ class CryptoGatewayGuiLayoutTests(unittest.TestCase):
         finally:
             app.destroy()
 
+    def test_runtime_refresh_uses_acl_v2_queries(self) -> None:
+        app = gui.CryptoGatewayApp()
+        try:
+            with mock.patch.object(app.worker, "submit_case") as submit_case:
+                app._refresh_runtime_views()
+            kinds = [call.args[0].kind for call in submit_case.call_args_list]
+            self.assertIn("acl_v2_keymap", kinds)
+            self.assertIn("acl_v2_hits", kinds)
+            self.assertNotIn("acl_key_map", kinds)
+            self.assertNotIn("rule_stats", kinds)
+        finally:
+            app.destroy()
+
+    def test_deploy_acl_rule_rejects_legacy_two_hex_v1_shape(self) -> None:
+        app = gui.CryptoGatewayApp()
+        try:
+            app.deploy_rule_slot.set(2)
+            app.deploy_rule_key.set("51")
+            with mock.patch.object(gui.messagebox, "showerror") as showerror:
+                with mock.patch.object(app.worker, "submit_case") as submit_case:
+                    app._deploy_acl_rule()
+            submit_case.assert_not_called()
+            showerror.assert_called_once()
+        finally:
+            app.destroy()
+
     def test_fatal_error_does_not_open_modal_dialog(self) -> None:
         app = gui.CryptoGatewayApp()
         try:

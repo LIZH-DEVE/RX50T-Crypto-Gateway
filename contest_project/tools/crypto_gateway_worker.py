@@ -421,6 +421,67 @@ class GatewayWorker:
                 self._emit_pmu_snapshot(pmu_result)
             return
 
+        if result.acl_v2_write_ack is not None:
+            self._emit(
+                "acl_v2_write_ack",
+                name=case.name,
+                tx=result.tx,
+                rx=result.rx,
+                expected=result.expected,
+                passed=result.passed,
+                duration_s=result.duration_s,
+                throughput_mbps=result.throughput_mbps,
+                description=case.description,
+                slot=result.acl_v2_write_ack.slot,
+                signature=result.acl_v2_write_ack.signature,
+            )
+            return
+
+        if case.kind == "acl_v2_write":
+            self._emit(
+                "acl_v2_write_error",
+                name=case.name,
+                tx=result.tx,
+                rx=result.rx,
+                expected=result.expected,
+                passed=result.passed,
+                duration_s=result.duration_s,
+                throughput_mbps=result.throughput_mbps,
+                description=case.description,
+            )
+            return
+
+        if result.acl_v2_key_map is not None:
+            self._emit(
+                "acl_v2_key_map",
+                name=case.name,
+                tx=result.tx,
+                rx=result.rx,
+                expected=result.expected,
+                passed=result.passed,
+                duration_s=result.duration_s,
+                throughput_mbps=result.throughput_mbps,
+                description=case.description,
+                signatures=result.acl_v2_key_map.signatures,
+                labels=result.acl_v2_key_map.display_hex(),
+            )
+            return
+
+        if result.acl_v2_hits is not None:
+            self._emit(
+                "acl_v2_hits",
+                name=case.name,
+                tx=result.tx,
+                rx=result.rx,
+                expected=result.expected,
+                passed=result.passed,
+                duration_s=result.duration_s,
+                throughput_mbps=result.throughput_mbps,
+                description=case.description,
+                counts=result.acl_v2_hits.counts,
+            )
+            return
+
         if result.acl_write_ack is not None:
             self._emit(
                 "acl_write_ack",
