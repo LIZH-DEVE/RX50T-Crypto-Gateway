@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Stop'
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $tcl = Join-Path $scriptDir 'create_tb_contest_acl_axis_core_project.tcl'

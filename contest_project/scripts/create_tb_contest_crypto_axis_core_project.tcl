@@ -1,4 +1,4 @@
-﻿set script_dir [file dirname [file normalize [info script]]]
+set script_dir [file dirname [file normalize [info script]]]
 set repo_root [file normalize [file join $script_dir .. ..]]
 set contest_root [file join $repo_root contest_project]
 set reference_root [file join $repo_root reference]

@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Stop'
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $tcl = Join-Path $scriptDir 'create_tb_uart_crypto_probe_acl_v2_project.tcl'
