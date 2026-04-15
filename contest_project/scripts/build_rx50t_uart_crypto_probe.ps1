@@ -1,14 +1,19 @@
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = 'Stop'
 
-$vivado = "D:\Xilinx\Vivado\2024.1\bin\vivado.bat"
-$tcl    = "D:\FPGAhanjia\jichuangsai\contest_project\scripts\create_rx50t_uart_crypto_probe_project.tcl"
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$tcl = Join-Path $scriptDir 'create_rx50t_uart_crypto_probe_project.tcl'
+if ($env:VIVADO_BIN -and (Test-Path $env:VIVADO_BIN)) {
+    $vivado = $env:VIVADO_BIN
+} else {
+    $vivado = 'D:\Xilinx\Vivado\2024.1\bin\vivado.bat'
+}
 
 if (!(Test-Path $vivado)) {
     throw "Vivado not found: $vivado"
 }
 
 if (!(Test-Path $tcl)) {
-    throw "Build script not found: $tcl"
+    throw "Script not found: $tcl"
 }
 
 & $vivado -mode batch -source $tcl

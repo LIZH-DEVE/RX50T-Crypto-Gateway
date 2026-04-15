@@ -103,6 +103,57 @@ class AclRuleCounters:
 
 
 @dataclass(frozen=True)
+class AclV2WriteAck:
+    slot: int
+    signature: bytes
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.slot <= 7:
+            raise ValueError("ACL slot must be in 0..7")
+        if len(self.signature) != 16:
+            raise ValueError("ACL v2 signature must be exactly 16 bytes")
+
+    def as_bytes(self) -> bytes:
+        return bytes([0x55, 0x12, 0x43, self.slot]) + self.signature
+
+
+@dataclass(frozen=True)
+class AclV2KeyMap:
+    signatures: tuple[bytes, ...]
+
+    def __post_init__(self) -> None:
+        if len(self.signatures) != 8:
+            raise ValueError("ACL v2 key map must contain exactly 8 signatures")
+        for sig in self.signatures:
+            if len(sig) != 16:
+                raise ValueError("Each ACL v2 signature must be exactly 16 bytes")
+
+    def as_bytes(self) -> bytes:
+        return bytes([0x55, 0x81, 0x4B]) + b"".join(self.signatures)
+
+    def display_hex(self) -> tuple[str, ...]:
+        return tuple(sig.hex() for sig in self.signatures)
+
+
+@dataclass(frozen=True)
+class AclV2HitCounters:
+    counts: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        if len(self.counts) != 8:
+            raise ValueError("ACL v2 hit counters must contain exactly 8 entries")
+
+    def as_bytes(self) -> bytes:
+        payload = bytearray([0x55, 0x21, 0x48])
+        for count in self.counts:
+            payload.extend(count.to_bytes(4, "big"))
+        return bytes(payload)
+
+    def as_dict(self) -> dict[int, int]:
+        return {i: count for i, count in enumerate(self.counts)}
+
+
+@dataclass(frozen=True)
 class PmuSnapshot:
     clk_hz: int
     global_cycles: int
@@ -225,6 +276,9 @@ class ProbeResult:
     rule_stats: AclRuleCounters | None = None
     acl_write_ack: AclWriteAck | None = None
     acl_key_map: AclKeyMap | None = None
+    acl_v2_write_ack: AclV2WriteAck | None = None
+    acl_v2_key_map: AclV2KeyMap | None = None
+    acl_v2_hits: AclV2HitCounters | None = None
     pmu_snapshot: PmuSnapshot | None = None
     pmu_clear_ack: PmuClearAck | None = None
     bench_result: BenchResult | None = None
@@ -384,6 +438,34 @@ def parse_acl_key_map_response(raw: bytes) -> AclKeyMap:
     if len(raw) != 10 or raw[:1] != b"K" or raw[-1:] != b"\n":
         raise ValueError(f"invalid ACL key-map response: {format_hex(raw)}")
     return AclKeyMap(tuple(raw[1:9]))
+
+
+def parse_acl_v2_write_ack(raw: bytes) -> AclV2WriteAck:
+    if len(raw) != 20 or raw[0] != 0x55 or raw[1] != 0x12 or raw[2] != 0x43:
+        raise ValueError(f"invalid ACL v2 write ACK: {format_hex(raw)}")
+    slot = raw[3]
+    signature = raw[4:20]
+    return AclV2WriteAck(slot=slot, signature=signature)
+
+
+def parse_acl_v2_keymap_response(raw: bytes) -> AclV2KeyMap:
+    if len(raw) != 131 or raw[0] != 0x55 or raw[1] != 0x81 or raw[2] != 0x4B:
+        raise ValueError(f"invalid ACL v2 key-map response: {format_hex(raw)}")
+    signatures = []
+    for i in range(8):
+        offset = 3 + i * 16
+        signatures.append(raw[offset:offset + 16])
+    return AclV2KeyMap(tuple(signatures))
+
+
+def parse_acl_v2_hits_response(raw: bytes) -> AclV2HitCounters:
+    if len(raw) != 35 or raw[0] != 0x55 or raw[1] != 0x21 or raw[2] != 0x48:
+        raise ValueError(f"invalid ACL v2 hits response: {format_hex(raw)}")
+    counts = []
+    for i in range(8):
+        offset = 3 + i * 4
+        counts.append(int.from_bytes(raw[offset:offset + 4], "big"))
+    return AclV2HitCounters(tuple(counts))
 
 
 def parse_pmu_snapshot_response(raw: bytes) -> PmuSnapshot:
@@ -748,6 +830,51 @@ def case_acl_write(index: int, key: int, expected: AclWriteAck | None = None) ->
     )
 
 
+def case_acl_v2_write(slot: int, signature_hex: str, expected: AclV2WriteAck | None = None) -> ProbeCase:
+    if not 0 <= slot <= 7:
+        raise ValueError("ACL v2 slot must be in 0..7")
+    signature_bytes = bytes.fromhex(signature_hex.replace(" ", ""))
+    if len(signature_bytes) != 16:
+        raise ValueError("ACL v2 signature must be exactly 32 hex chars (16 bytes)")
+    payload = bytes([0x43, slot]) + signature_bytes
+    return ProbeCase(
+        name=f"ACL v2 Write slot {slot}",
+        tx=build_frame(payload),
+        response_len=0,
+        expected=expected.as_bytes() if expected else None,
+        description=f"Write ACL v2 slot {slot} to {signature_hex}",
+        kind="acl_v2_write",
+        response_mode="framed",
+        response_opcode=0x43,
+    )
+
+
+def case_acl_v2_keymap(expected: AclV2KeyMap | None = None) -> ProbeCase:
+    return ProbeCase(
+        name="Query ACL v2 Key Map",
+        tx=build_frame(bytes([0x4B])),
+        response_len=0,
+        expected=expected.as_bytes() if expected else None,
+        description="ACL v2 8x16B slot-key readback",
+        kind="acl_v2_keymap",
+        response_mode="framed",
+        response_opcode=0x4B,
+    )
+
+
+def case_acl_v2_hit_counters(expected: AclV2HitCounters | None = None) -> ProbeCase:
+    return ProbeCase(
+        name="Query ACL v2 Hit Counters",
+        tx=build_frame(bytes([0x48])),
+        response_len=0,
+        expected=expected.as_bytes() if expected else None,
+        description="ACL v2 8x32-bit hit counter readback",
+        kind="acl_v2_hits",
+        response_mode="framed",
+        response_opcode=0x48,
+    )
+
+
 def case_query_pmu(expected: PmuSnapshot | None = None) -> ProbeCase:
     return ProbeCase(
         name="Query PMU",
@@ -876,6 +1003,24 @@ def run_case_on_serial(
     elif case.kind == "acl_key_map":
         try:
             acl_key_map = parse_acl_key_map_response(rx)
+            passed = case.expected is None or rx == case.expected
+        except ValueError:
+            passed = False
+    elif case.kind == "acl_v2_write":
+        try:
+            acl_v2_write_ack = parse_acl_v2_write_ack(rx)
+            passed = case.expected is None or rx == case.expected
+        except ValueError:
+            passed = False
+    elif case.kind == "acl_v2_keymap":
+        try:
+            acl_v2_key_map = parse_acl_v2_keymap_response(rx)
+            passed = case.expected is None or rx == case.expected
+        except ValueError:
+            passed = False
+    elif case.kind == "acl_v2_hits":
+        try:
+            acl_v2_hits = parse_acl_v2_hits_response(rx)
             passed = case.expected is None or rx == case.expected
         except ValueError:
             passed = False

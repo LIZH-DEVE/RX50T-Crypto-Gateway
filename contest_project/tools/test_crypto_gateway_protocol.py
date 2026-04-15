@@ -7,6 +7,9 @@ import send_rx50t_crypto_probe as cli
 from crypto_gateway_protocol import (
     AclKeyMap,
     AclRuleCounters,
+    AclV2HitCounters,
+    AclV2KeyMap,
+    AclV2WriteAck,
     AclWriteAck,
     BenchResult,
     FatalErrorResponse,
@@ -30,6 +33,9 @@ from crypto_gateway_protocol import (
     build_stream_start_frame,
     case_query_pmu,
     case_run_onchip_bench,
+    case_acl_v2_hit_counters,
+    case_acl_v2_keymap,
+    case_acl_v2_write,
     case_acl_write,
     case_aes_eight_block_vector,
     case_aes_four_block_vector,
@@ -43,6 +49,9 @@ from crypto_gateway_protocol import (
     extract_first_payload_key,
     pkcs7_pad,
     parse_acl_key_map_response,
+    parse_acl_v2_hits_response,
+    parse_acl_v2_keymap_response,
+    parse_acl_v2_write_ack,
     parse_acl_write_ack,
     parse_bench_result_response,
     parse_pmu_clear_ack,
@@ -173,6 +182,27 @@ class CryptoGatewayProtocolTests(unittest.TestCase):
         self.assertEqual(case.tx, bytes([0x55, 0x01, 0x4B]))
         self.assertEqual(case.response_len, 10)
 
+    def test_case_acl_v2_write_builds_framed_control_frame(self) -> None:
+        case = case_acl_v2_write(3, "00112233445566778899aabbccddeeff")
+        self.assertEqual(
+            case.tx,
+            bytes.fromhex("55 12 43 03 00 11 22 33 44 55 66 77 88 99 aa bb cc dd ee ff"),
+        )
+        self.assertEqual(case.response_mode, "framed")
+        self.assertEqual(case.response_opcode, 0x43)
+
+    def test_case_acl_v2_keymap_builds_framed_query(self) -> None:
+        case = case_acl_v2_keymap()
+        self.assertEqual(case.tx, bytes([0x55, 0x01, 0x4B]))
+        self.assertEqual(case.response_mode, "framed")
+        self.assertEqual(case.response_opcode, 0x4B)
+
+    def test_case_acl_v2_hit_counters_builds_framed_query(self) -> None:
+        case = case_acl_v2_hit_counters()
+        self.assertEqual(case.tx, bytes([0x55, 0x01, 0x48]))
+        self.assertEqual(case.response_mode, "framed")
+        self.assertEqual(case.response_opcode, 0x48)
+
     def test_case_query_pmu_builds_query_frame(self) -> None:
         case = case_query_pmu()
         self.assertEqual(case.tx, bytes([0x55, 0x01, 0x50]))
@@ -231,6 +261,22 @@ class CryptoGatewayProtocolTests(unittest.TestCase):
         )
         self.assertEqual(key_map, AclKeyMap((0x58, 0x59, 0x5A, 0x51, 0x50, 0x52, 0x54, 0x55)))
         self.assertEqual(key_map.display_labels(), ("X", "Y", "Z", "Q", "P", "R", "T", "U"))
+
+    def test_parse_acl_v2_write_ack(self) -> None:
+        ack = parse_acl_v2_write_ack(
+            bytes.fromhex("55 12 43 03 00 11 22 33 44 55 66 77 88 99 aa bb cc dd ee ff")
+        )
+        self.assertEqual(ack, AclV2WriteAck(slot=3, signature=bytes.fromhex("00112233445566778899aabbccddeeff")))
+
+    def test_parse_acl_v2_keymap_response(self) -> None:
+        frame = bytes([0x55, 0x81, 0x4B]) + b"".join((bytes([value]) * 16) for value in range(8))
+        key_map = parse_acl_v2_keymap_response(frame)
+        self.assertEqual(key_map, AclV2KeyMap(tuple(bytes([value]) * 16 for value in range(8))))
+
+    def test_parse_acl_v2_hits_response(self) -> None:
+        frame = bytes.fromhex("55 21 48") + b"".join(value.to_bytes(4, "big") for value in range(8))
+        hits = parse_acl_v2_hits_response(frame)
+        self.assertEqual(hits, AclV2HitCounters(tuple(range(8))))
 
     def test_parse_pmu_snapshot_response(self) -> None:
         snapshot = parse_pmu_snapshot_response(

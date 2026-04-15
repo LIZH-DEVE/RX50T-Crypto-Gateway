@@ -13,7 +13,7 @@ module contest_uart_crypto_probe #(
 );
 
     localparam [7:0] ASCII_CFG_ACK = 8'h43;
-    localparam [7:0] ASCII_CFG_OP  = 8'h03;
+    localparam [7:0] ASCII_CFG_OP  = 8'h12;
     localparam [7:0] ASCII_ERROR   = 8'h45;
     localparam [7:0] ASCII_KEYMAP  = 8'h4B;
     localparam [7:0] ASCII_NL      = 8'h0A;
@@ -89,6 +89,7 @@ module contest_uart_crypto_probe #(
     localparam [2:0] CTRL_TX_KEYMAP       = 3'd4;
     localparam [2:0] CTRL_TX_RULE_STATS   = 3'd5;
     localparam [2:0] CTRL_TX_STATS        = 3'd6;
+    localparam [2:0] CTRL_TX_HIT_STATS    = 3'd7;
 
     function automatic is_explicit_mode_length(input [7:0] payload_len);
         begin
@@ -151,6 +152,78 @@ module contest_uart_crypto_probe #(
                 4'd9: flat_keymap_byte = ASCII_NL;
                 default: flat_keymap_byte = 8'h00;
             endcase
+        end
+    endfunction
+
+    function automatic [7:0] acl_v2_cfg_ack_byte(input [4:0] idx, input [2:0] slot, input [127:0] key);
+        begin
+            case (idx)
+                5'd0: acl_v2_cfg_ack_byte = 8'h55;
+                5'd1: acl_v2_cfg_ack_byte = 8'h12;
+                5'd2: acl_v2_cfg_ack_byte = ASCII_CFG_ACK;
+                5'd3: acl_v2_cfg_ack_byte = {5'd0, slot};
+                5'd4: acl_v2_cfg_ack_byte = key[127:120];
+                5'd5: acl_v2_cfg_ack_byte = key[119:112];
+                5'd6: acl_v2_cfg_ack_byte = key[111:104];
+                5'd7: acl_v2_cfg_ack_byte = key[103:96];
+                5'd8: acl_v2_cfg_ack_byte = key[95:88];
+                5'd9: acl_v2_cfg_ack_byte = key[87:80];
+                5'd10: acl_v2_cfg_ack_byte = key[79:72];
+                5'd11: acl_v2_cfg_ack_byte = key[71:64];
+                5'd12: acl_v2_cfg_ack_byte = key[63:56];
+                5'd13: acl_v2_cfg_ack_byte = key[55:48];
+                5'd14: acl_v2_cfg_ack_byte = key[47:40];
+                5'd15: acl_v2_cfg_ack_byte = key[39:32];
+                5'd16: acl_v2_cfg_ack_byte = key[31:24];
+                5'd17: acl_v2_cfg_ack_byte = key[23:16];
+                5'd18: acl_v2_cfg_ack_byte = key[15:8];
+                5'd19: acl_v2_cfg_ack_byte = key[7:0];
+                default: acl_v2_cfg_ack_byte = 8'h00;
+            endcase
+        end
+    endfunction
+
+    function automatic [7:0] acl_v2_keymap_byte(input [7:0] idx, input [1023:0] keys_flat);
+        integer slot_idx;
+        integer byte_idx;
+        integer byte_off;
+        begin
+            if (idx == 8'd0) begin
+                acl_v2_keymap_byte = 8'h55;
+            end else if (idx == 8'd1) begin
+                acl_v2_keymap_byte = 8'h81;
+            end else if (idx == 8'd2) begin
+                acl_v2_keymap_byte = ASCII_KEYMAP;
+            end else if (idx <= 8'd130) begin
+                byte_idx = idx - 8'd3;
+                slot_idx = byte_idx / 16;
+                byte_off = byte_idx % 16;
+                acl_v2_keymap_byte = keys_flat[(slot_idx * 128) + 127 - (byte_off * 8) -: 8];
+            end else begin
+                acl_v2_keymap_byte = 8'h00;
+            end
+        end
+    endfunction
+
+    function automatic [7:0] acl_v2_hits_byte(input [5:0] idx, input [255:0] hits_flat);
+        integer ctr_idx;
+        integer byte_off;
+        integer flat_idx;
+        begin
+            if (idx == 6'd0) begin
+                acl_v2_hits_byte = 8'h55;
+            end else if (idx == 6'd1) begin
+                acl_v2_hits_byte = 8'h21;
+            end else if (idx == 6'd2) begin
+                acl_v2_hits_byte = ASCII_RULE;
+            end else if (idx <= 6'd34) begin
+                flat_idx = idx - 6'd3;
+                ctr_idx = flat_idx / 4;
+                byte_off = flat_idx % 4;
+                acl_v2_hits_byte = hits_flat[(ctr_idx * 32) + 31 - (byte_off * 8) -: 8];
+            end else begin
+                acl_v2_hits_byte = 8'h00;
+            end
         end
     endfunction
 
@@ -381,26 +454,34 @@ module contest_uart_crypto_probe #(
         end
     endfunction
 
-    function automatic [7:0] bench_candidate_byte(input [3:0] idx);
+    function automatic [127:0] bench_candidate_prefix(input [3:0] idx);
         begin
             case (idx)
-                4'd0: bench_candidate_byte = 8'h01;
-                4'd1: bench_candidate_byte = 8'h13;
-                4'd2: bench_candidate_byte = 8'h24;
-                4'd3: bench_candidate_byte = 8'h36;
-                4'd4: bench_candidate_byte = 8'h47;
-                4'd5: bench_candidate_byte = 8'h68;
-                4'd6: bench_candidate_byte = 8'h79;
-                4'd7: bench_candidate_byte = 8'h8A;
-                4'd8: bench_candidate_byte = 8'h9B;
-                4'd9: bench_candidate_byte = 8'hAC;
-                4'd10: bench_candidate_byte = 8'hBD;
-                4'd11: bench_candidate_byte = 8'hCE;
-                4'd12: bench_candidate_byte = 8'hDF;
-                4'd13: bench_candidate_byte = 8'hE1;
-                4'd14: bench_candidate_byte = 8'hF2;
-                default: bench_candidate_byte = 8'h0C;
+                4'd0: bench_candidate_prefix = 128'h00000000000000000000000000000000;
+                4'd1: bench_candidate_prefix = 128'hFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF;
+                4'd2: bench_candidate_prefix = 128'h11111111111111112222222222222222;
+                4'd3: bench_candidate_prefix = 128'h33333333333333334444444444444444;
+                4'd4: bench_candidate_prefix = 128'h55555555555555556666666666666666;
+                4'd5: bench_candidate_prefix = 128'h77777777777777778888888888888888;
+                4'd6: bench_candidate_prefix = 128'h9999999999999999AAAAAAAAAAAAAAAA;
+                4'd7: bench_candidate_prefix = 128'hBBBBBBBBBBBBBBBBCCCCCCCCCCCCCCCC;
+                4'd8: bench_candidate_prefix = 128'hDDDDDDDDEEEEEEEEFFFFFFFFFFFFFFFF;
+                4'd9: bench_candidate_prefix = 128'h0123456789ABCDEF0123456789ABCDEF;
+                4'd10: bench_candidate_prefix = 128'hFEDCBA9876543210FEDCBA9876543210;
+                4'd11: bench_candidate_prefix = 128'hAAAAAAAA5555555555555555AAAAAAAA;
+                4'd12: bench_candidate_prefix = 128'h123456789ABCDEF123456789ABCDEF12;
+                4'd13: bench_candidate_prefix = 128'hDEADBEEFCAFEBABEDECAFFEE0BADF00D;
+                4'd14: bench_candidate_prefix = 128'hFEEEFEEEFEEEFEEEFEEEFEEEFEEEFEEE;
+                default: bench_candidate_prefix = 128'h0C0C0C0C0C0C0C0C0C0C0C0C0C0C0C0C;
             endcase
+        end
+    endfunction
+
+    function automatic [7:0] bench_prefix_byte(input [127:0] prefix, input [3:0] idx);
+        reg [127:0] shifted;
+        begin
+            shifted = prefix >> ((4'd15 - idx) * 8);
+            bench_prefix_byte = shifted[7:0];
         end
     endfunction
 
@@ -492,7 +573,7 @@ module contest_uart_crypto_probe #(
     reg        frame_bench_algo_q;
     reg        frame_cfg_q;
     reg  [7:0] frame_cfg_index_q;
-    reg  [7:0] frame_cfg_key_q;
+    reg  [127:0] frame_cfg_key_q;
     reg        frame_cfg_key_seen_q;
     reg        frame_algo_sel_q;
     reg        frame_stream_cap_q;
@@ -530,14 +611,14 @@ module contest_uart_crypto_probe #(
     wire       acl_cfg_busy;
     wire       acl_cfg_done;
     wire       acl_cfg_error;
-    wire [63:0] acl_rule_keys_flat;
-    wire [63:0] acl_rule_counts_flat;
+    wire [1023:0] acl_rule_keys_flat;
+    wire [255:0] acl_rule_counts_flat;
 
     reg        acl_cfg_valid_q;
     reg  [2:0] acl_cfg_index_q;
-    reg  [7:0] acl_cfg_key_q;
+    reg  [127:0] acl_cfg_key_q;
     reg  [2:0] pending_cfg_ack_idx_q;
-    reg  [7:0] pending_cfg_ack_key_q;
+    reg  [127:0] pending_cfg_ack_key_q;
     reg        pending_error_q;
     reg        pending_block_q;
     reg        pending_cfg_ack_q;
@@ -549,8 +630,10 @@ module contest_uart_crypto_probe #(
     reg  [7:0] pending_stats_err_q;
     reg        pending_rule_stats_q;
     reg [63:0] pending_rule_stats_flat_q;
+    reg        pending_hit_stats_q;
+    reg [255:0] pending_hit_stats_flat_q;
     reg        pending_keymap_q;
-    reg [63:0] pending_keymap_flat_q;
+    reg [1023:0] pending_keymap_flat_q;
     reg  [7:0] stat_total_frames_q;
     reg  [7:0] stat_acl_blocks_q;
     reg  [7:0] stat_aes_frames_q;
@@ -614,7 +697,7 @@ module contest_uart_crypto_probe #(
     reg [63:0] bench_cycles_q;
     reg [23:0] bench_watchdog_q;
     reg  [7:0] bench_latch_status_q;
-    reg  [7:0] bench_safe_head_byte_q;
+    reg  [127:0] bench_safe_head_prefix_q;
     reg  [7:0] bench_lfsr_q;
     reg [31:0] bench_crc32_q;
     reg        bench_result_valid_q;
@@ -636,17 +719,18 @@ module contest_uart_crypto_probe #(
     reg [63:0] bench_tx_cycles_q;
     reg [31:0] bench_tx_crc32_q;
     reg  [2:0] ctrl_tx_kind_q;
-    reg  [3:0] ctrl_tx_idx_q;
+    reg  [7:0] ctrl_tx_idx_q;
     reg  [2:0] tx_owner_q;
     reg  [7:0] ctrl_tx_cfg_ack_idx_q;
-    reg  [7:0] ctrl_tx_cfg_ack_key_q;
+    reg [127:0] ctrl_tx_cfg_ack_key_q;
     reg  [7:0] ctrl_tx_stats_total_q;
     reg  [7:0] ctrl_tx_stats_acl_q;
     reg  [7:0] ctrl_tx_stats_aes_q;
     reg  [7:0] ctrl_tx_stats_sm4_q;
     reg  [7:0] ctrl_tx_stats_err_q;
     reg [63:0] ctrl_tx_rule_stats_flat_q;
-    reg [63:0] ctrl_tx_keymap_flat_q;
+    reg [255:0] ctrl_tx_hit_stats_flat_q;
+    reg [1023:0] ctrl_tx_keymap_flat_q;
     reg        crc_pipe_valid_q;
     reg        crc_pipe_last_q;
     reg  [7:0] crc_pipe_data_q;
@@ -732,7 +816,9 @@ module contest_uart_crypto_probe #(
     assign ctrl_tx_last_w     = ctrl_tx_last_r;
     assign bench_source_mode_w = (bench_state_q == BENCH_RUN);
     assign bench_sink_mode_w   = (bench_state_q == BENCH_RUN) || (bench_state_q == BENCH_DRAIN_CRC);
-    assign bench_source_data_w = (bench_bytes_in_q == 32'd0) ? bench_safe_head_byte_q : bench_lfsr_q;
+    assign bench_source_data_w = (bench_bytes_in_q < 32'd16) ?
+        bench_prefix_byte(bench_safe_head_prefix_q, bench_bytes_in_q[3:0]) :
+        bench_lfsr_q;
     assign bench_source_last_w = (bench_bytes_in_q == (BENCH_TOTAL_BYTES - 32'd1));
     assign axis_core_in_tvalid_w = bench_source_mode_w ? (bench_bytes_in_q < BENCH_TOTAL_BYTES) : axis_in_pending_valid_q;
     assign axis_core_in_tdata_w  = bench_source_mode_w ? bench_source_data_w : axis_in_pending_data_q;
@@ -771,14 +857,14 @@ module contest_uart_crypto_probe #(
                                     1'b0));
     assign axis_out_fire_w    = axis_out_tvalid_w && axis_out_tready_w;
     assign bench_candidate_hit_w =
-        (bench_candidate_byte(bench_pick_idx_q) == acl_rule_keys_flat[7:0])   ||
-        (bench_candidate_byte(bench_pick_idx_q) == acl_rule_keys_flat[15:8])  ||
-        (bench_candidate_byte(bench_pick_idx_q) == acl_rule_keys_flat[23:16]) ||
-        (bench_candidate_byte(bench_pick_idx_q) == acl_rule_keys_flat[31:24]) ||
-        (bench_candidate_byte(bench_pick_idx_q) == acl_rule_keys_flat[39:32]) ||
-        (bench_candidate_byte(bench_pick_idx_q) == acl_rule_keys_flat[47:40]) ||
-        (bench_candidate_byte(bench_pick_idx_q) == acl_rule_keys_flat[55:48]) ||
-        (bench_candidate_byte(bench_pick_idx_q) == acl_rule_keys_flat[63:56]);
+        (bench_candidate_prefix(bench_pick_idx_q) == acl_rule_keys_flat[127:0])   ||
+        (bench_candidate_prefix(bench_pick_idx_q) == acl_rule_keys_flat[255:128]) ||
+        (bench_candidate_prefix(bench_pick_idx_q) == acl_rule_keys_flat[383:256]) ||
+        (bench_candidate_prefix(bench_pick_idx_q) == acl_rule_keys_flat[511:384]) ||
+        (bench_candidate_prefix(bench_pick_idx_q) == acl_rule_keys_flat[639:512]) ||
+        (bench_candidate_prefix(bench_pick_idx_q) == acl_rule_keys_flat[767:640]) ||
+        (bench_candidate_prefix(bench_pick_idx_q) == acl_rule_keys_flat[895:768]) ||
+        (bench_candidate_prefix(bench_pick_idx_q) == acl_rule_keys_flat[1023:896]);
     assign tx_mux_valid_w    = (tx_owner_q == TX_OWNER_BENCH)  ? bench_tx_active_w :
                                (tx_owner_q == TX_OWNER_PMU)    ? pmu_tx_active_w :
                                (tx_owner_q == TX_OWNER_STREAM) ? stream_source_valid_w :
@@ -824,33 +910,28 @@ module contest_uart_crypto_probe #(
 
         case (ctrl_tx_kind_q)
             CTRL_TX_ERROR: begin
-                ctrl_tx_data_r = (ctrl_tx_idx_q == 4'd0) ? ASCII_ERROR : ASCII_NL;
-                ctrl_tx_last_r = (ctrl_tx_idx_q == 4'd1);
+                ctrl_tx_data_r = (ctrl_tx_idx_q == 7'd0) ? ASCII_ERROR : ASCII_NL;
+                ctrl_tx_last_r = (ctrl_tx_idx_q == 7'd1);
             end
 
             CTRL_TX_BLOCK: begin
-                ctrl_tx_data_r = (ctrl_tx_idx_q == 4'd0) ? 8'h44 : ASCII_NL;
-                ctrl_tx_last_r = (ctrl_tx_idx_q == 4'd1);
+                ctrl_tx_data_r = (ctrl_tx_idx_q == 7'd0) ? 8'h44 : ASCII_NL;
+                ctrl_tx_last_r = (ctrl_tx_idx_q == 7'd1);
             end
 
             CTRL_TX_CFG_ACK: begin
-                case (ctrl_tx_idx_q)
-                    4'd0: ctrl_tx_data_r = ASCII_CFG_ACK;
-                    4'd1: ctrl_tx_data_r = {5'd0, ctrl_tx_cfg_ack_idx_q[2:0]};
-                    4'd2: ctrl_tx_data_r = ctrl_tx_cfg_ack_key_q;
-                    default: ctrl_tx_data_r = ASCII_NL;
-                endcase
-                ctrl_tx_last_r = (ctrl_tx_idx_q == 4'd3);
+                ctrl_tx_data_r = acl_v2_cfg_ack_byte(ctrl_tx_idx_q[4:0], ctrl_tx_cfg_ack_idx_q[2:0], ctrl_tx_cfg_ack_key_q);
+                ctrl_tx_last_r = (ctrl_tx_idx_q == 8'd19);
             end
 
             CTRL_TX_KEYMAP: begin
-                ctrl_tx_data_r = flat_keymap_byte(ctrl_tx_idx_q, ctrl_tx_keymap_flat_q);
-                ctrl_tx_last_r = (ctrl_tx_idx_q == 4'd9);
+                ctrl_tx_data_r = acl_v2_keymap_byte(ctrl_tx_idx_q[7:0], ctrl_tx_keymap_flat_q);
+                ctrl_tx_last_r = (ctrl_tx_idx_q == 8'd130);
             end
 
             CTRL_TX_RULE_STATS: begin
-                ctrl_tx_data_r = flat_rule_byte(ctrl_tx_idx_q, ctrl_tx_rule_stats_flat_q);
-                ctrl_tx_last_r = (ctrl_tx_idx_q == 4'd9);
+                ctrl_tx_data_r = flat_rule_byte(ctrl_tx_idx_q[3:0], ctrl_tx_rule_stats_flat_q);
+                ctrl_tx_last_r = (ctrl_tx_idx_q == 5'd9);
             end
 
             CTRL_TX_STATS: begin
@@ -863,6 +944,11 @@ module contest_uart_crypto_probe #(
                                     ctrl_tx_stats_err_q
                                  );
                 ctrl_tx_last_r = (ctrl_tx_idx_q == 4'd6);
+            end
+
+            CTRL_TX_HIT_STATS: begin
+                ctrl_tx_data_r = acl_v2_hits_byte(ctrl_tx_idx_q[5:0], ctrl_tx_hit_stats_flat_q);
+                ctrl_tx_last_r = (ctrl_tx_idx_q == 6'd34);
             end
 
             default: begin
@@ -987,7 +1073,7 @@ module contest_uart_crypto_probe #(
             frame_bench_algo_q        <= ALG_SM4;
             frame_cfg_q               <= 1'b0;
             frame_cfg_index_q         <= 8'd0;
-            frame_cfg_key_q           <= 8'd0;
+            frame_cfg_key_q           <= 128'd0;
             frame_cfg_key_seen_q      <= 1'b0;
             frame_algo_sel_q          <= ALG_SM4;
             frame_stream_cap_q        <= 1'b0;
@@ -1009,9 +1095,9 @@ module contest_uart_crypto_probe #(
             acl_in_last_q             <= 1'b0;
             acl_cfg_valid_q           <= 1'b0;
             acl_cfg_index_q           <= 3'd0;
-            acl_cfg_key_q             <= 8'd0;
+            acl_cfg_key_q             <= 128'd0;
             pending_cfg_ack_idx_q     <= 3'd0;
-            pending_cfg_ack_key_q     <= 8'd0;
+            pending_cfg_ack_key_q     <= 128'd0;
             pending_error_q           <= 1'b0;
             pending_block_q           <= 1'b0;
             pending_cfg_ack_q         <= 1'b0;
@@ -1023,8 +1109,10 @@ module contest_uart_crypto_probe #(
             pending_stats_err_q       <= 8'd0;
             pending_rule_stats_q      <= 1'b0;
             pending_rule_stats_flat_q <= 64'd0;
+            pending_hit_stats_q       <= 1'b0;
+            pending_hit_stats_flat_q  <= 256'd0;
             pending_keymap_q          <= 1'b0;
-            pending_keymap_flat_q     <= 64'd0;
+            pending_keymap_flat_q     <= 1024'd0;
             stat_total_frames_q       <= 8'd0;
             stat_acl_blocks_q         <= 8'd0;
             stat_aes_frames_q         <= 8'd0;
@@ -1087,7 +1175,7 @@ module contest_uart_crypto_probe #(
             bench_cycles_q            <= 64'd0;
             bench_watchdog_q          <= 24'd0;
             bench_latch_status_q      <= BENCH_STATUS_OK;
-            bench_safe_head_byte_q    <= 8'h01;
+            bench_safe_head_prefix_q   <= 128'h00000000000000000000000000000000;
             bench_lfsr_q              <= 8'hB8;
             bench_crc32_q             <= 32'hFFFF_FFFF;
             bench_result_valid_q      <= 1'b0;
@@ -1109,17 +1197,18 @@ module contest_uart_crypto_probe #(
             bench_tx_cycles_q         <= 64'd0;
             bench_tx_crc32_q          <= 32'd0;
             ctrl_tx_kind_q            <= CTRL_TX_NONE;
-            ctrl_tx_idx_q             <= 4'd0;
+            ctrl_tx_idx_q             <= 8'd0;
             tx_owner_q                <= TX_OWNER_NONE;
             ctrl_tx_cfg_ack_idx_q     <= 8'd0;
-            ctrl_tx_cfg_ack_key_q     <= 8'd0;
+            ctrl_tx_cfg_ack_key_q     <= 128'd0;
             ctrl_tx_stats_total_q     <= 8'd0;
             ctrl_tx_stats_acl_q       <= 8'd0;
             ctrl_tx_stats_aes_q       <= 8'd0;
             ctrl_tx_stats_sm4_q       <= 8'd0;
             ctrl_tx_stats_err_q       <= 8'd0;
             ctrl_tx_rule_stats_flat_q <= 64'd0;
-            ctrl_tx_keymap_flat_q     <= 64'd0;
+            ctrl_tx_hit_stats_flat_q  <= 256'd0;
+            ctrl_tx_keymap_flat_q     <= 1024'd0;
             axis_soft_reset_q         <= 1'b0;
             crc_pipe_valid_q          <= 1'b0;
             crc_pipe_last_q           <= 1'b0;
@@ -1184,7 +1273,7 @@ module contest_uart_crypto_probe #(
 
             acl_cfg_valid_q   <= 1'b0;
             acl_cfg_index_q   <= 3'd0;
-            acl_cfg_key_q     <= 8'd0;
+            acl_cfg_key_q     <= 128'd0;
             axis_in_pending_clear_q <= 1'b0;
 
             if (pmu_count_enable_w) begin
@@ -1271,10 +1360,10 @@ module contest_uart_crypto_probe #(
             if (tx_owner_q == TX_OWNER_CTRL && tx_fire_w) begin
                 if (ctrl_last_fire_w) begin
                     ctrl_tx_kind_q <= CTRL_TX_NONE;
-                    ctrl_tx_idx_q  <= 4'd0;
+                    ctrl_tx_idx_q  <= 8'd0;
                     tx_owner_q     <= TX_OWNER_NONE;
                 end else begin
-                    ctrl_tx_idx_q <= ctrl_tx_idx_q + 4'd1;
+                    ctrl_tx_idx_q <= ctrl_tx_idx_q + 8'd1;
                 end
             end
 
@@ -1344,36 +1433,42 @@ module contest_uart_crypto_probe #(
                 end else if (pending_error_q) begin
                     pending_error_q <= 1'b0;
                     ctrl_tx_kind_q  <= CTRL_TX_ERROR;
-                    ctrl_tx_idx_q   <= 4'd0;
+                    ctrl_tx_idx_q   <= 8'd0;
                     tx_owner_q      <= TX_OWNER_CTRL;
                 end else if (pending_block_q) begin
                     pending_block_q <= 1'b0;
                     ctrl_tx_kind_q  <= CTRL_TX_BLOCK;
-                    ctrl_tx_idx_q   <= 4'd0;
+                    ctrl_tx_idx_q   <= 8'd0;
                     tx_owner_q      <= TX_OWNER_CTRL;
                 end else if (pending_cfg_ack_q) begin
                     pending_cfg_ack_q     <= 1'b0;
                     ctrl_tx_kind_q        <= CTRL_TX_CFG_ACK;
-                    ctrl_tx_idx_q         <= 4'd0;
+                    ctrl_tx_idx_q         <= 8'd0;
                     ctrl_tx_cfg_ack_idx_q <= pending_cfg_ack_idx_q;
                     ctrl_tx_cfg_ack_key_q <= pending_cfg_ack_key_q;
                     tx_owner_q            <= TX_OWNER_CTRL;
                 end else if (pending_keymap_q) begin
                     pending_keymap_q          <= 1'b0;
                     ctrl_tx_kind_q            <= CTRL_TX_KEYMAP;
-                    ctrl_tx_idx_q             <= 4'd0;
+                    ctrl_tx_idx_q             <= 8'd0;
                     ctrl_tx_keymap_flat_q     <= pending_keymap_flat_q;
                     tx_owner_q                <= TX_OWNER_CTRL;
                 end else if (pending_rule_stats_q) begin
                     pending_rule_stats_q      <= 1'b0;
                     ctrl_tx_kind_q            <= CTRL_TX_RULE_STATS;
-                    ctrl_tx_idx_q             <= 4'd0;
+                    ctrl_tx_idx_q             <= 8'd0;
                     ctrl_tx_rule_stats_flat_q <= pending_rule_stats_flat_q;
                     tx_owner_q                <= TX_OWNER_CTRL;
+                end else if (pending_hit_stats_q) begin
+                    pending_hit_stats_q      <= 1'b0;
+                    ctrl_tx_kind_q           <= CTRL_TX_HIT_STATS;
+                    ctrl_tx_idx_q            <= 8'd0;
+                    ctrl_tx_hit_stats_flat_q <= pending_hit_stats_flat_q;
+                    tx_owner_q               <= TX_OWNER_CTRL;
                 end else if (pending_stats_q) begin
                     pending_stats_q       <= 1'b0;
                     ctrl_tx_kind_q        <= CTRL_TX_STATS;
-                    ctrl_tx_idx_q         <= 4'd0;
+                    ctrl_tx_idx_q         <= 8'd0;
                     ctrl_tx_stats_total_q <= pending_stats_total_q;
                     ctrl_tx_stats_acl_q   <= pending_stats_acl_q;
                     ctrl_tx_stats_aes_q   <= pending_stats_aes_q;
@@ -1413,7 +1508,7 @@ module contest_uart_crypto_probe #(
                     bench_cycles_q   <= bench_cycles_q + 64'd1;
                     bench_watchdog_q <= bench_watchdog_q + 24'd1;
                     if (!bench_candidate_hit_w) begin
-                        bench_safe_head_byte_q <= bench_candidate_byte(bench_pick_idx_q);
+                        bench_safe_head_prefix_q <= bench_candidate_prefix(bench_pick_idx_q);
                         bench_state_q          <= BENCH_ARM;
                     end else if (bench_pick_idx_q == 4'd15) begin
                         bench_latch_status_q <= BENCH_STATUS_INTERNAL;
@@ -1517,7 +1612,7 @@ module contest_uart_crypto_probe #(
                     frame_key_valid_q         <= 1'b0;
                     acl_block_seen_q          <= 1'b0;
                     frame_cfg_index_q         <= 8'd0;
-                    frame_cfg_key_q           <= 8'd0;
+                    frame_cfg_key_q           <= 128'd0;
                     frame_cfg_key_seen_q      <= 1'b0;
                     frame_stream_cap_q        <= 1'b0;
                     frame_pmu_query_q         <= 1'b0;
@@ -1556,7 +1651,7 @@ module contest_uart_crypto_probe #(
                         frame_bench_force_q <= 1'b1;
                     end else if ((parser_payload_len == 8'd1) && (parser_payload_byte == STREAM_CAP_QUERY)) begin
                         frame_stream_cap_q <= 1'b1;
-                    end else if ((parser_payload_len == 8'd3) && (parser_payload_byte == ASCII_CFG_OP)) begin
+                    end else if ((parser_payload_len == 8'd18) && (parser_payload_byte == ASCII_CFG_ACK)) begin
                         frame_cfg_q <= 1'b1;
                     end else if ((parser_payload_len == 8'd4) && (parser_payload_byte == STREAM_START_OP)) begin
                         frame_stream_start_q <= 1'b1;
@@ -1600,9 +1695,11 @@ module contest_uart_crypto_probe #(
                 end else if (frame_cfg_q) begin
                     if (parser_payload_count == 8'd2) begin
                         frame_cfg_index_q <= parser_payload_byte;
-                    end else if (parser_payload_count == 8'd3) begin
-                        frame_cfg_key_q      <= parser_payload_byte;
-                        frame_cfg_key_seen_q <= 1'b1;
+                    end else if (parser_payload_count >= 8'd3 && parser_payload_count <= 8'd18) begin
+                        frame_cfg_key_q <= {frame_cfg_key_q[119:0], parser_payload_byte};
+                        if (parser_payload_count == 8'd18) begin
+                            frame_cfg_key_seen_q <= 1'b1;
+                        end
                     end
                 end else if (frame_stream_start_q) begin
                     if (parser_payload_count == 8'd2) begin
@@ -1919,8 +2016,8 @@ module contest_uart_crypto_probe #(
                 end else if (((parser_payload_valid && (parser_payload_count == 8'd1) &&
                                (parser_payload_len == 8'd1) && (parser_payload_byte == ASCII_RULE))) ||
                               frame_rule_query_q) begin
-                    pending_rule_stats_q      <= 1'b1;
-                    pending_rule_stats_flat_q <= acl_rule_counts_flat;
+                    pending_hit_stats_q       <= 1'b1;
+                    pending_hit_stats_flat_q <= acl_rule_counts_flat;
                 end else if (((parser_payload_valid && (parser_payload_count == 8'd1) &&
                                (parser_payload_len == 8'd1) && (parser_payload_byte == ASCII_KEYMAP))) ||
                               frame_keymap_query_q) begin
@@ -1928,17 +2025,19 @@ module contest_uart_crypto_probe #(
                     pending_keymap_flat_q <= acl_rule_keys_flat;
                 end else if (frame_cfg_q) begin
                     if ((!frame_cfg_key_seen_q &&
-                         !(parser_payload_valid && (parser_payload_count == 8'd3))) ||
+                         !(parser_payload_valid && (parser_payload_count == 8'd18))) ||
                         (((parser_payload_valid && (parser_payload_count == 8'd2)) ?
                           parser_payload_byte : frame_cfg_index_q) > 8'd7)) begin
                         pending_error_q     <= 1'b1;
                         stat_error_frames_q <= stat_error_frames_q + 8'd1;
                     end else begin
                         acl_cfg_valid_q       <= 1'b1;
-                        acl_cfg_index_q       <= (parser_payload_valid && (parser_payload_count == 8'd2)) ? parser_payload_byte[2:0] : frame_cfg_index_q[2:0];
-                        acl_cfg_key_q         <= (parser_payload_valid && (parser_payload_count == 8'd3)) ? parser_payload_byte : frame_cfg_key_q;
-                        pending_cfg_ack_idx_q <= (parser_payload_valid && (parser_payload_count == 8'd2)) ? parser_payload_byte[2:0] : frame_cfg_index_q[2:0];
-                        pending_cfg_ack_key_q <= (parser_payload_valid && (parser_payload_count == 8'd3)) ? parser_payload_byte : frame_cfg_key_q;
+                        acl_cfg_index_q       <= frame_cfg_index_q[2:0];
+                        acl_cfg_key_q         <= ((parser_payload_valid && (parser_payload_count == 8'd18)) ?
+                                                  {frame_cfg_key_q[119:0], parser_payload_byte} : frame_cfg_key_q);
+                        pending_cfg_ack_idx_q <= frame_cfg_index_q[2:0];
+                        pending_cfg_ack_key_q <= ((parser_payload_valid && (parser_payload_count == 8'd18)) ?
+                                                  {frame_cfg_key_q[119:0], parser_payload_byte} : frame_cfg_key_q);
                     end
                 end else if (frame_proto_error_q) begin
                     pending_error_q     <= 1'b1;
@@ -1971,7 +2070,7 @@ module contest_uart_crypto_probe #(
                 frame_bench_algo_q        <= ALG_SM4;
                 frame_cfg_q               <= 1'b0;
                 frame_cfg_index_q         <= 8'd0;
-                frame_cfg_key_q           <= 8'd0;
+                frame_cfg_key_q           <= 128'd0;
                 frame_cfg_key_seen_q      <= 1'b0;
                 frame_algo_sel_q          <= ALG_SM4;
                 frame_stream_cap_q        <= 1'b0;

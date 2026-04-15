@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections import deque
 from datetime import datetime
@@ -8,10 +8,14 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from crypto_gateway_protocol import (
-    AclRuleCounters,
+    AclV2HitCounters,
+    AclV2KeyMap,
+    AclV2WriteAck,
     DEFAULT_ACL_RULE_BYTES,
     StatsCounters,
-    case_acl_write,
+    case_acl_v2_write,
+    case_acl_v2_keymap,
+    case_acl_v2_hit_counters,
     case_aes_eight_block_vector,
     case_aes_four_block_vector,
     case_aes_known_vector,
@@ -19,10 +23,8 @@ from crypto_gateway_protocol import (
     case_block_ascii,
     case_invalid_selector,
     case_force_run_onchip_bench,
-    case_query_acl_keys,
     case_query_bench_result,
     case_query_pmu,
-    case_query_rule_stats,
     case_query_stats,
     case_run_onchip_bench,
     case_clear_pmu,
@@ -502,7 +504,7 @@ class CryptoGatewayApp(tk.Tk):
             action_grid.columnconfigure(idx, weight=1)
         action_specs = [
             ("Query Stats", lambda: self._submit_case(case_query_stats())),
-            ("Rule Hits", lambda: self._submit_case(case_query_rule_stats())),
+            ("Rule Hits", lambda: self._submit_case(case_acl_v2_hit_counters())),
             ("Invalid", lambda: self._submit_case(case_invalid_selector())),
             ("SM4 16B", lambda: self._submit_case(case_sm4_known_vector())),
             ("AES 16B", lambda: self._submit_case(case_aes_known_vector())),
@@ -919,13 +921,13 @@ class CryptoGatewayApp(tk.Tk):
         self._set_banner(f"Queued action: {case.name}", "info")
 
     def _refresh_runtime_views(self) -> None:
-        self.worker.submit_case(case_query_acl_keys())
-        self.worker.submit_case(case_query_rule_stats())
+        self.worker.submit_case(case_acl_v2_keymap())
+        self.worker.submit_case(case_acl_v2_hit_counters())
         self._append_log("Queued: Query ACL Key Map")
         self._append_log("Queued: Query Rule Hits")
 
     def _refresh_acl_key_map(self) -> None:
-        self.worker.submit_case(case_query_acl_keys())
+        self.worker.submit_case(case_acl_v2_keymap())
         self._append_log("Queued: Query ACL Key Map")
         self._set_banner("Queued ACL key-map refresh.", "info")
 
@@ -966,19 +968,25 @@ class CryptoGatewayApp(tk.Tk):
     def _deploy_acl_rule(self) -> None:
         try:
             slot = int(self.deploy_rule_slot.get())
-            key = parse_rule_byte_input(self.deploy_rule_key.get())
+            hex_sig = self.deploy_rule_key.get().strip().replace(" ", "")
+            if len(hex_sig) != 32:
+                messagebox.showerror(
+                    "Deploy Threat Signature",
+                    "Must be exactly 32 hex chars (16 bytes) for ACL v2",
+                )
+                return
+            bytes.fromhex(hex_sig)
+            self.worker.submit_case(case_acl_v2_write(slot, hex_sig))
+            self._append_log(
+                f"Queued ACL v2 write: slot {slot} -> {hex_sig[:16]}...",
+                "warn",
+            )
+            self._set_banner(
+                f"Deploying ACL v2 slot {slot}",
+                "warn",
+            )
         except ValueError as exc:
             messagebox.showerror("Deploy Threat Signature", str(exc))
-            return
-        self.worker.submit_case(case_acl_write(slot, key))
-        self._append_log(
-            f"Queued ACL write: slot {slot} -> {display_rule_byte(key)}",
-            "warn",
-        )
-        self._set_banner(
-            f"Deploying ACL slot {slot} -> {display_rule_byte(key)}",
-            "warn",
-        )
 
     def _encrypt_file(self) -> None:
         path = filedialog.askopenfilename(title="Select a plaintext file to encrypt")
@@ -994,7 +1002,7 @@ class CryptoGatewayApp(tk.Tk):
 
     def _run_rule_stats_refresh(self) -> None:
         self.rule_refresh_job = None
-        self.worker.submit_case(case_query_rule_stats())
+        self.worker.submit_case(case_acl_v2_hit_counters())
         self._append_log("Queued: Query Rule Hits (auto-refresh)")
 
     @staticmethod
@@ -1006,11 +1014,25 @@ class CryptoGatewayApp(tk.Tk):
             return None
         return frame[2]
 
-    def _apply_acl_key_map(self, keys: tuple[int, ...]) -> None:
+    @staticmethod
+    def _format_acl_v2_signature(signature: bytes) -> str:
+        hex_text = signature.hex().upper()
+        if len(hex_text) != 32:
+            return hex_text or "--"
+        preview = "".join(chr(value) if 32 <= value <= 126 else "." for value in signature[:4])
+        return f"{hex_text[:8]}...{hex_text[-8:]} [{preview}]"
+
+    def _apply_acl_key_map(self, keys: tuple[int, ...] | tuple[bytes, ...]) -> None:
         if len(keys) != 8:
             return
-        self.rule_slot_keys = list(keys)
-        self.rule_slot_labels = [display_rule_byte(value) for value in self.rule_slot_keys]
+        first = keys[0]
+        if isinstance(first, (bytes, bytearray)):
+            signatures = tuple(bytes(value) for value in keys)
+            self.rule_slot_keys = [sig[0] if sig else 0 for sig in signatures]
+            self.rule_slot_labels = [self._format_acl_v2_signature(sig) for sig in signatures]
+        else:
+            self.rule_slot_keys = [int(value) for value in keys]
+            self.rule_slot_labels = [display_rule_byte(value) for value in self.rule_slot_keys]
         for idx, label in enumerate(self.rule_slot_labels):
             title = self.acl_rule_title_labels.get(idx)
             if title is not None:
@@ -1289,8 +1311,11 @@ class CryptoGatewayApp(tk.Tk):
             bg, fg = palette[key]
             label.configure(bg=bg, fg=fg)
 
-    def _apply_rule_stats(self, rule_stats: AclRuleCounters) -> None:
-        counts = tuple(rule_stats.counts)
+    def _apply_rule_stats(self, rule_stats: AclV2HitCounters | tuple[int, ...]) -> None:
+        if isinstance(rule_stats, tuple):
+            counts = tuple(int(value) for value in rule_stats)
+        else:
+            counts = tuple(rule_stats.counts)
         max_hits = max(max(counts, default=0), 1)
         for idx, label in self.acl_rule_hit_labels.items():
             hits = counts[idx]
@@ -1299,16 +1324,16 @@ class CryptoGatewayApp(tk.Tk):
             canvas = self.acl_rule_bar_canvases.get(idx)
             fill_id = self.acl_rule_bar_fills.get(idx)
             if canvas is not None and fill_id is not None:
-                canvas.update_idletasks()
-                width = max(canvas.winfo_width(), 1)
-                fill_width = max(2, int(width * hits / max_hits)) if hits > 0 else 0
-                canvas.coords(fill_id, 0, 0, fill_width, 18)
-                canvas.itemconfigure(fill_id, fill="#ef4444" if hits > 0 else "#07111f")
-            if hits > self.acl_rule_last_counts.get(idx, 0):
+                width = 220.0 * (hits / max_hits if max_hits else 0.0)
+                canvas.coords(fill_id, 0, 0, width, 18)
+                canvas.itemconfigure(fill_id, fill=self.colors["accent2"] if hits else "#07111f")
+            last_hits = self.acl_rule_last_counts.get(idx, 0)
+            if hits > last_hits:
                 self._flash_rule_heat(idx)
             self.acl_rule_last_counts[idx] = hits
-        hot_idx = max(range(8), key=lambda slot: counts[slot])
-        hot_hits = counts[hot_idx]
+
+        hot_idx = max(range(8), key=lambda slot: counts[slot]) if counts else 0
+        hot_hits = counts[hot_idx] if counts else 0
         if hot_hits > 0:
             self.hot_rule_text.set(
                 f"Hot Rule (board): slot {hot_idx} / {self.rule_slot_labels[hot_idx]} ({hot_hits} hits)"
@@ -1458,6 +1483,53 @@ class CryptoGatewayApp(tk.Tk):
             )
             if expected is not None and not passed:
                 self._append_log(f"Expected {format_hex(expected)}", "error")
+        elif kind == "acl_v2_key_map":
+            self._record_transport_activity(len(payload["rx"]), float(payload["duration_s"]))
+            signatures = tuple(bytes(value) for value in payload["signatures"])
+            self._apply_acl_key_map(signatures)
+            rendered = " ".join(
+                f"slot{idx}={self.rule_slot_labels[idx]}" for idx in range(len(self.rule_slot_labels))
+            )
+            self._append_log(f"ACL V2 KEY MAP: {rendered}", "pass" if payload["passed"] else "error")
+            self._set_banner("Board-side ACL v2 key map refreshed.", "pass" if payload["passed"] else "error")
+        elif kind == "acl_v2_write_ack":
+            self._record_transport_activity(len(payload["rx"]), float(payload["duration_s"]))
+            slot = int(payload["slot"])
+            signature = bytes(payload["signature"])
+            label = self._format_acl_v2_signature(signature)
+            self._append_log(
+                f"ACL V2 WRITE ACK: slot {slot} -> {label} ({format_hex(payload['rx'])})",
+                "pass",
+            )
+            self.acl_rule_hit_vars[slot].set("0")
+            self.acl_rule_last_counts[slot] = 0
+            canvas = self.acl_rule_bar_canvases.get(slot)
+            fill_id = self.acl_rule_bar_fills.get(slot)
+            if canvas is not None and fill_id is not None:
+                canvas.coords(fill_id, 0, 0, 0, 18)
+                canvas.itemconfigure(fill_id, fill="#07111f")
+            self._set_banner(
+                f"ACL v2 slot {slot} deployed. Refreshing board view...",
+                "pass",
+            )
+            self.worker.submit_case(case_acl_v2_keymap())
+            self.worker.submit_case(case_acl_v2_hit_counters())
+        elif kind == "acl_v2_hits":
+            self._record_transport_activity(len(payload["rx"]), float(payload["duration_s"]))
+            counts = tuple(int(value) for value in payload["counts"])
+            self._apply_rule_stats(counts)
+            counters = {
+                f"slot{idx}:{self.rule_slot_labels[idx]}": counts[idx]
+                for idx in range(8)
+            }
+            self._append_log(
+                "ACL V2 HITS: " + " ".join(f"{key}={value}" for key, value in counters.items()),
+                "pass" if payload["passed"] else "error",
+            )
+            self._set_banner(
+                "Board-side ACL v2 hit counters refreshed.",
+                "pass" if payload["passed"] else "error",
+            )
         elif kind == "acl_key_map":
             self._record_transport_activity(len(payload["rx"]), float(payload["duration_s"]))
             keys = tuple(int(value) for value in payload["keys"])
@@ -1486,8 +1558,8 @@ class CryptoGatewayApp(tk.Tk):
                 f"ACL slot {slot} deployed to {display_rule_byte(key)}. Refreshing board view...",
                 "pass",
             )
-            self.worker.submit_case(case_query_acl_keys())
-            self.worker.submit_case(case_query_rule_stats())
+            self.worker.submit_case(case_acl_v2_keymap())
+            self.worker.submit_case(case_acl_v2_hit_counters())
         elif kind == "acl_write_error":
             self._record_transport_activity(len(payload["rx"]), float(payload["duration_s"]))
             self._append_log(
@@ -1639,3 +1711,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

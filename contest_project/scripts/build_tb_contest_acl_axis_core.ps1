@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$tcl = Join-Path $scriptDir 'create_tb_contest_crypto_axis_core_project.tcl'
+$tcl = Join-Path $scriptDir 'create_tb_contest_acl_axis_core_project.tcl'
 if ($env:VIVADO_BIN -and (Test-Path $env:VIVADO_BIN)) {
     $vivado = $env:VIVADO_BIN
 } else {
