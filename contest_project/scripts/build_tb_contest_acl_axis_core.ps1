@@ -1,14 +1,22 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = 'Stop'
+
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$repoRoot = Split-Path -Parent $scriptDir
-$tclPath = Join-Path $scriptDir "create_tb_contest_acl_axis_core_project.tcl"
-$vivado = "D:\Xilinx\Vivado\2024.1\bin\vivado.bat"
-if (-not (Test-Path $vivado)) {
-    throw "Vivado not found at $vivado"
+$tcl = Join-Path $scriptDir 'create_tb_contest_acl_axis_core_project.tcl'
+if ($env:VIVADO_BIN -and (Test-Path $env:VIVADO_BIN)) {
+    $vivado = $env:VIVADO_BIN
+} else {
+    $vivado = 'D:\Xilinx\Vivado\2024.1\bin\vivado.bat'
 }
-Push-Location $repoRoot
-try {
-    & $vivado -mode batch -source $tclPath
-} finally {
-    Pop-Location
+
+if (!(Test-Path $vivado)) {
+    throw "Vivado not found: $vivado"
+}
+
+if (!(Test-Path $tcl)) {
+    throw "Script not found: $tcl"
+}
+
+& $vivado -mode batch -source $tcl
+if ($LASTEXITCODE -ne 0) {
+    throw "Vivado simulation failed with exit code $LASTEXITCODE"
 }

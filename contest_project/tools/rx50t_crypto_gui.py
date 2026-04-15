@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections import deque
 from datetime import datetime
@@ -8,14 +8,12 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from crypto_gateway_protocol import (
-    AclRuleCounters,
     AclV2HitCounters,
     AclV2KeyMap,
     AclV2WriteAck,
     DEFAULT_ACL_RULE_BYTES,
     StatsCounters,
     case_acl_v2_write,
-    case_acl_write,
     case_acl_v2_keymap,
     case_acl_v2_hit_counters,
     case_aes_eight_block_vector,
@@ -25,10 +23,8 @@ from crypto_gateway_protocol import (
     case_block_ascii,
     case_invalid_selector,
     case_force_run_onchip_bench,
-    case_query_acl_keys,
     case_query_bench_result,
     case_query_pmu,
-    case_query_rule_stats,
     case_query_stats,
     case_run_onchip_bench,
     case_clear_pmu,
@@ -1315,7 +1311,7 @@ class CryptoGatewayApp(tk.Tk):
             bg, fg = palette[key]
             label.configure(bg=bg, fg=fg)
 
-    def _apply_rule_stats(self, rule_stats: AclRuleCounters | AclV2HitCounters | tuple[int, ...]) -> None:
+    def _apply_rule_stats(self, rule_stats: AclV2HitCounters | tuple[int, ...]) -> None:
         if isinstance(rule_stats, tuple):
             counts = tuple(int(value) for value in rule_stats)
         else:
@@ -1715,3 +1711,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
