@@ -37,6 +37,7 @@ set source_files [list \
     [file join $contest_root rtl contest contest_axis_block_unpacker.sv] \
     [file join $contest_root rtl contest contest_crypto_block_engine.sv] \
     [file join $contest_root rtl contest contest_crypto_axis_core.sv] \
+    [file join $contest_root rtl contest contest_trace_buffer.sv] \
     [file join $contest_root rtl contest contest_uart_crypto_probe.sv] \
     [file join $contest_root rtl contest rx50t_uart_crypto_probe_top.sv] \
     [file join $contest_root rtl contest rx50t_uart_crypto_probe_board_top.sv] \
@@ -69,3 +70,4 @@ open_run impl_1
 report_drc -file [file join $project_dir rx50t_uart_crypto_probe_drc_impl.rpt]
 report_timing_summary -file [file join $project_dir rx50t_uart_crypto_probe_timing_impl.rpt]
 report_utilization -file [file join $project_dir rx50t_uart_crypto_probe_util_impl.rpt]
+

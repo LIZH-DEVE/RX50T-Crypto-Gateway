@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$tcl = Join-Path $scriptDir 'create_tb_uart_crypto_probe_watchdog_project.tcl'
+$tcl = Join-Path $scriptDir 'create_tb_uart_crypto_probe_trace_project.tcl'
 if ($env:VIVADO_BIN -and (Test-Path $env:VIVADO_BIN)) {
     $vivado = $env:VIVADO_BIN
 } else {
@@ -13,7 +13,7 @@ if (!(Test-Path $vivado)) {
 }
 
 if (!(Test-Path $tcl)) {
-    throw "Simulation script not found: $tcl"
+    throw "Script not found: $tcl"
 }
 
 & $vivado -mode batch -source $tcl

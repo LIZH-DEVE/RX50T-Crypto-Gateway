@@ -149,6 +149,45 @@ class CryptoGatewayGuiLayoutTests(unittest.TestCase):
         finally:
             app.destroy()
 
+    def test_trace_panel_renders_trace_snapshot(self) -> None:
+        app = gui.CryptoGatewayApp()
+        try:
+            self.assertTrue(hasattr(app, "trace_box"))
+            app._handle_event(
+                gui.WorkerEvent(
+                    kind="trace_snapshot",
+                    payload={
+                        "valid_entries": 2,
+                        "write_ptr": 2,
+                        "wrapped": False,
+                        "enabled": True,
+                        "entries": [
+                            {
+                                "timestamp_ms": 100,
+                                "event_code": 0x08,
+                                "event_name": "CLOCK_GATED",
+                                "arg0": 0,
+                                "arg1": 0,
+                                "description": "CLOCK_GATED",
+                            },
+                            {
+                                "timestamp_ms": 125,
+                                "event_code": 0x07,
+                                "event_name": "ACL_CFG_ACK",
+                                "arg0": 2,
+                                "arg1": 0,
+                                "description": "ACL_CFG_ACK slot=2",
+                            },
+                        ],
+                    },
+                )
+            )
+            rendered = app.trace_box.get("1.0", "end").strip()
+            self.assertIn("t=100.000 ms | CLOCK_GATED", rendered)
+            self.assertIn("t=125.000 ms | ACL_CFG_ACK slot=2", rendered)
+        finally:
+            app.destroy()
+
     def test_benchmark_panel_exists_and_bench_event_does_not_touch_uart_throughput(self) -> None:
         app = gui.CryptoGatewayApp()
         try:

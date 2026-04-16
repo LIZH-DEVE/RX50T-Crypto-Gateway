@@ -3,14 +3,14 @@ set repo_root [file normalize [file join $script_dir .. ..]]
 set contest_root [file join $repo_root contest_project]
 set reference_root [file join $repo_root reference]
 
-if {[info exists ::env(RX50T_CLOCK_GATING_POWER_SIM_DIR)] && $::env(RX50T_CLOCK_GATING_POWER_SIM_DIR) ne ""} {
-    set project_dir [file normalize $::env(RX50T_CLOCK_GATING_POWER_SIM_DIR)]
+if {[info exists ::env(RX50T_TRACE_UART_SIM_DIR)] && $::env(RX50T_TRACE_UART_SIM_DIR) ne ""} {
+    set project_dir [file normalize $::env(RX50T_TRACE_UART_SIM_DIR)]
 } else {
-    set project_dir [file normalize [file join $contest_root build sim_tb_uart_crypto_probe_clock_gating_power]]
+    set project_dir [file normalize [file join $contest_root build sim_tb_uart_crypto_probe_trace]]
 }
 file mkdir $project_dir
 
-create_project sim_tb_uart_crypto_probe_clock_gating_power $project_dir -part xc7a50tfgg484-1 -force
+create_project sim_tb_uart_crypto_probe_trace $project_dir -part xc7a50tfgg484-1 -force
 
 set source_files [list \
     [file join $reference_root rtl core crypto aes_core.v] \
@@ -40,23 +40,17 @@ set source_files [list \
     [file join $contest_root rtl contest contest_trace_buffer.sv] \
     [file join $contest_root rtl contest contest_uart_crypto_probe.sv] \
     [file join $contest_root rtl contest rx50t_uart_crypto_probe_top.sv] \
-    [file join $contest_root rtl contest rx50t_uart_crypto_probe_board_top.sv] \
 ]
 add_files -norecurse $source_files
 
-add_files -fileset sim_1 -norecurse [list [file join $contest_root tb contest tb_uart_crypto_probe_clock_gating_power.sv]]
+add_files -fileset sim_1 -norecurse [list [file join $contest_root tb contest tb_uart_crypto_probe_trace.sv]]
 
-set_property top tb_uart_crypto_probe_clock_gating_power [get_filesets sim_1]
+set_property top tb_uart_crypto_probe_trace [get_filesets sim_1]
 update_compile_order -fileset sources_1
 update_compile_order -fileset sim_1
 
 launch_simulation -simset sim_1 -mode behavioral
-set saif_file [file join $project_dir tb_uart_crypto_probe_clock_gating_power.saif]
-open_saif $saif_file
-log_saif [get_objects -r /tb_uart_crypto_probe_clock_gating_power/dut/u_top/u_probe/*]
 run all
-close_saif
 close_sim
 close_project
 exit
-

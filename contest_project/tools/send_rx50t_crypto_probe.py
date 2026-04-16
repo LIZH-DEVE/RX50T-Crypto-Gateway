@@ -21,6 +21,7 @@ from crypto_gateway_protocol import (
     case_block_ascii,
     case_force_run_onchip_bench,
     case_invalid_selector,
+    query_trace_snapshot_on_serial,
     case_query_bench_result,
     case_query_pmu,
     case_query_rule_stats,
@@ -53,6 +54,19 @@ def _print_pmu_snapshot(snapshot: PmuSnapshot) -> None:
         f"clock_flags=0x{snapshot.crypto_clock_status_flags:016X} "
         f"clock_status={clock_status}"
     )
+
+
+def _print_trace_snapshot(snapshot) -> None:
+    print(
+        f"[TRACE] valid_entries={snapshot.meta.valid_entries} "
+        f"write_ptr={snapshot.meta.write_ptr} wrapped={int(snapshot.meta.wrapped)} enabled={int(snapshot.meta.enabled)}"
+    )
+    for idx, entry in enumerate(snapshot.entries):
+        print(
+            f"[TRACE_EVT] idx={idx:03d} t_ms={entry.timestamp_ms:.3f} "
+            f"code=0x{entry.event_code:02X} {entry.describe()}"
+        )
+
 
 
 def _print_bench_result(result: BenchResult, snapshot: PmuSnapshot | None = None) -> None:
@@ -151,6 +165,11 @@ def main() -> int:
         help="Clear the PMU hardware counters and expect 55 02 4A 00",
     )
     parser.add_argument(
+        "--query-trace",
+        action="store_true",
+        help="Query the hardware trace buffer and print decoded trace events",
+    )
+    parser.add_argument(
         "--run-onchip-bench",
         action="store_true",
         help="Start a 1MiB on-chip AXIS benchmark session",
@@ -199,6 +218,7 @@ def main() -> int:
             args.query_rule_stats,
             args.query_pmu,
             args.clear_pmu,
+            args.query_trace,
             args.run_onchip_bench,
             args.force_run_onchip_bench,
             args.query_bench,
@@ -211,7 +231,7 @@ def main() -> int:
             "--sm4-two-block-vector, --aes-two-block-vector, --sm4-four-block-vector, "
             "--aes-four-block-vector, --sm4-eight-block-vector, --aes-eight-block-vector, "
             "--block-ascii, --invalid-selector, "
-            "--query-stats, --query-rule-stats, --query-pmu, --clear-pmu, "
+            "--query-stats, --query-rule-stats, --query-pmu, --clear-pmu, --query-trace, "
             "--run-onchip-bench, --force-run-onchip-bench, or --query-bench"
         )
 
@@ -263,6 +283,8 @@ def main() -> int:
         case = case_query_pmu()
     elif args.clear_pmu:
         case = case_clear_pmu()
+    elif args.query_trace:
+        case = None
     elif args.run_onchip_bench:
         if not args.algo:
             raise SystemExit("--algo is required with --run-onchip-bench")
@@ -276,14 +298,18 @@ def main() -> int:
     else:
         case = case_block_ascii(args.block_ascii)
 
-    print(f"[TX] {format_hex(case.tx)}")
-    if args.query_stats and case.expected is None:
+    if args.query_trace:
+        print("[TX] 55 01 54 + 16 paged trace reads")
+        print("[EXPECT] trace metadata response plus paged trace data")
+    else:
+        print(f"[TX] {format_hex(case.tx)}")
+    if not args.query_trace and args.query_stats and case.expected is None:
         print("[EXPECT] stats response with 5 counters")
     elif args.query_rule_stats and case.expected is None:
         print("[EXPECT] rule stats response with 8 counters")
-    elif args.query_pmu and case.expected is None:
+    elif not args.query_trace and args.query_pmu and case.expected is None:
         print("[EXPECT] PMU snapshot response (schema v1/v2/v3)")
-    elif args.clear_pmu and case.expected is None:
+    elif not args.query_trace and args.clear_pmu and case.expected is None:
         print("[EXPECT] PMU clear ACK 55 02 4A 00")
     elif (args.run_onchip_bench or args.force_run_onchip_bench or args.query_bench) and case.expected is None:
         print("[EXPECT] benchmark result frame 55 14 62 01 status algo bytes cycles crc32")
@@ -291,11 +317,21 @@ def main() -> int:
         print(f"[EXPECT] {format_hex(case.expected)}")
 
     with serial.Serial(args.port, args.baud, timeout=0.1) as ser:
-        result = run_host_case_on_serial(ser, case, args.timeout, baud=args.baud)
-        bench_pmu = None
-        if result.bench_result is not None and result.bench_result.cycles > 0:
-            pmu_result = run_case_on_serial(ser, case_query_pmu(), args.timeout)
-            bench_pmu = pmu_result.pmu_snapshot
+        if args.query_trace:
+            trace_snapshot = query_trace_snapshot_on_serial(ser, args.timeout)
+            result = None
+            bench_pmu = None
+        else:
+            result = run_host_case_on_serial(ser, case, args.timeout, baud=args.baud)
+            bench_pmu = None
+            if result.bench_result is not None and result.bench_result.cycles > 0:
+                pmu_result = run_case_on_serial(ser, case_query_pmu(), args.timeout)
+                bench_pmu = pmu_result.pmu_snapshot
+
+    if args.query_trace:
+        _print_trace_snapshot(trace_snapshot)
+        print("[PASS] trace snapshot query matched format.")
+        return 0
 
     print(f"[RX] {format_hex(result.rx)}")
     if args.query_stats and case.expected is None:
