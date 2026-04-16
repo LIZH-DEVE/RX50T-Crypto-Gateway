@@ -1,8 +1,8 @@
-# RX50T Crypto Gateway
+﻿# RX50T Crypto Gateway
 
 `RX50T Crypto Gateway` is a pure-`PL` security datapath prototype for the `RX50T` board.
 
-The currently validated line is:
+The currently validated hardware line is:
 
 `UART @ 2,000,000 baud -> parser -> protocol dispatcher -> contest_crypto_axis_core (ACL AXIS + packer + crypto block engine + unpacker) -> UART`
 
@@ -12,81 +12,80 @@ The project deliberately avoids:
 - full `Ethernet/IP/UDP`
 
 The board is used for the hard real-time path only:
-- frame parsing
-- ACL blocking
-- runtime ACL rule rewrite
+- framed UART command/data ingress
+- ACL v2 blocking
 - AES/SM4 encryption
-- hardware-side observability through counters and PMU snapshots
+- watchdog-based fault recovery
+- PMU and trace-buffer observability
 
 ## Current Status
 
-Fresh validated baseline:
-- AXIS v1.1 mainline datapath through `contest_crypto_axis_core`
-- board-side `2,000,000 baud` UART datapath
+Current merged baseline under `main`, plus this `P2` branch work:
+- `ACL v2`: `8` runtime slots, `16B` signatures, `32-bit` hit counters, sliding-window block path
+- `PMU v3`: stream counters + clock-gating counters + clock status flags
+- `P1` clock gating: `BUFGCE`-gated `contest_crypto_axis_core` island with GUI `Clock: ACTIVE / GATED`
+- `P2` trace buffer: `256 x 64-bit`, BRAM-backed, independent `1 ms` timestamp base, paged UART readback
 - `AES-128` and `SM4-128`
 - `16B / 32B / 64B / 128B` block encryption
 - `128B` streaming file path on the board and in the GUI worker
-- `8` runtime ACL slots backed by BRAM
-- ACL hot update without reboot through control frames
-- ACL key-map readback
-- per-slot ACL hit counters
-- PMU v1.1 hardware snapshot and clear path
+- on-chip `1 MiB` benchmark flow
+- watchdog fatal frames: `55 02 EE code`
 
 Current host-side capabilities:
-- CLI probe tool for vectors, stats, ACL, and PMU
+- CLI probe tool for vectors, stats, ACL v2, PMU, bench, and trace readback
 - Tkinter GUI for:
   - live connect / disconnect
   - AES/SM4 demo vectors
   - runtime file encryption
-  - live ACL key-map readback
+  - Evidence Dashboard with frozen file-session snapshot
+  - live ACL v2 key-map / hit-counter readback
   - `Deploy Threat Signature`
-  - PMU panel with `HW Util / UART Stall / Credit Block / ACL Events`
+  - PMU panel with `HW Util / UART Stall / Credit Block / Clock Status`
+  - manual `Read Trace`
 
-Current default ACL bytes:
-- slot `0`: `X`
-- slot `1`: `Y`
-- slot `2`: `Z`
-- slot `3`: `W`
-- slot `4`: `P`
-- slot `5`: `R`
-- slot `6`: `T`
-- slot `7`: `U`
-
-Runtime ACL constraints:
-- rule width is `1 byte`
+ACL runtime constraints that still apply:
+- rule width is fixed at `16 bytes`
+- slot count is fixed at `8`
 - updates are `volatile only`
-- duplicate rule bytes are rejected
 - rewriting a slot resets that slot's hit counter
 
 ## Board Baseline
 
 - board: `RX50T`
-- serial port: `COM12`
+- serial port used in the latest merged board baseline: `COM12`
 - UART: `2,000,000 8N1`
 - clock: `Y18 / 50MHz`
 - UART pins: `K1 (RX) / J1 (TX)`
 - reset key: `J20`
-- FTDI latency timer used during the latest board run: `1 ms`
+- FTDI latency timer used in the latest merged board run: `1 ms`
 
 ## Control and Data Plane
 
 Data plane:
-- `UART -> parser -> ACL -> AES/SM4 -> UART`
+- `UART -> parser -> ACL v2 -> AES/SM4 -> UART`
 
 Control plane:
 - stats query
-- ACL rule-hit query
-- ACL key-map query
-- ACL slot rewrite
+- ACL v2 hit-counter query
+- ACL v2 key-map query
+- ACL v2 slot rewrite
 - PMU snapshot query
 - PMU clear
+- trace metadata query
+- trace page query
+- on-chip bench run / result query
 
-The current PMU v1.1 counters are:
+The current PMU v3 counters are:
 - `global_cycles`
 - `crypto_active_cycles`
 - `uart_tx_stall_cycles`
 - `stream_credit_block_cycles`
 - `acl_block_events`
+- `stream_bytes_in`
+- `stream_bytes_out`
+- `stream_chunk_count`
+- `crypto_clock_gated_cycles`
+- `crypto_clock_status_flags`
 
 ## Protocol Quick Reference
 
@@ -98,23 +97,38 @@ Current commands:
 - stats query:
   - `55 01 3F`
   - response: `53 total acl aes sm4 err 0A`
-- rule-hit query:
+- ACL v2 hit-counter query:
   - `55 01 48`
-  - response: `48 c0 c1 c2 c3 c4 c5 c6 c7 0A`
-- ACL key-map query:
+  - response: `55 21 48 <8 * be32 counters>`
+- ACL v2 key-map query:
   - `55 01 4B`
-  - response: `4B key0 key1 key2 key3 key4 key5 key6 key7 0A`
-- ACL write:
-  - `55 03 03 idx key`
-  - response: `43 idx key 0A`
-  - reject: `45 0A`
+  - response: `55 81 4B <8 * 16B signatures>`
+- ACL v2 write:
+  - request: `55 12 43 <slot> <16B signature>`
+  - ACK: `55 12 43 <slot> <16B signature>`
 - PMU query:
   - `55 01 50`
-  - response:
-    - `55 2E 50 01 clk_hz_be32 global_be64 crypto_active_be64 uart_tx_stall_be64 credit_block_be64 acl_block_events_be64`
+  - current response schema: `v0x03`
+  - payload fields: `0x50 0x03 clk_hz_be32 + 10 * be64 counters`
 - PMU clear:
   - `55 01 4A`
   - response: `55 02 4A 00`
+- fatal frame:
+  - `55 02 EE code`
+  - `code = 0x01` stream watchdog timeout
+  - `code = 0x02` crypto watchdog timeout
+- trace metadata query:
+  - `55 01 54`
+  - response: `55 06 54 01 valid_be16 write_ptr flags`
+- trace page query:
+  - `55 02 54 <page_idx>`
+  - response: `55 85 54 02 page_idx entry_count flags <16 * be64 entries>`
+
+Trace entry format:
+- `[63:32] timestamp_ms`
+- `[31:24] event_code`
+- `[23:16] arg0`
+- `[15:0] arg1`
 
 ## Repository Layout
 
@@ -150,6 +164,7 @@ Program the board, then run CLI smoke:
 py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --baud 2000000 --query-stats
 py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --baud 2000000 --clear-pmu
 py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --baud 2000000 --query-pmu
+py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --baud 2000000 --query-trace
 py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --baud 2000000 --sm4-known-vector
 py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --baud 2000000 --aes-known-vector
 ```
@@ -162,67 +177,56 @@ py -3 .\contest_project\tools\rx50t_crypto_gui.py
 
 ## Latest Verified Results
 
-Latest build and board-tested tag:
-- `axis-v1.1-board-baseline-20260413`
+Fresh Python verification on `feature/p2-trace-buffer`:
+- `107 passed`
 
-Fresh build result:
+Fresh RTL / TB verification on `feature/p2-trace-buffer`:
+- `build_tb_contest_trace_buffer.ps1`: pass
+- `build_tb_uart_crypto_probe_trace.ps1`: pass
+- `build_tb_uart_crypto_probe_acl_v2.ps1`: pass
+- `build_tb_uart_crypto_probe_onchip_bench.ps1`: pass
+- `build_tb_uart_crypto_probe_watchdog.ps1`: pass
+
+Fresh build result on `feature/p2-trace-buffer`:
 - bitstream:
   - `contest_project/build/rx50t_uart_crypto_probe/rx50t_uart_crypto_probe.runs/impl_1/rx50t_uart_crypto_probe_board_top.bit`
-- `synth WNS = 8.603ns`
-- `synth WHS = 0.058ns`
-- `impl WNS = 6.392ns`
-- `impl WHS = 0.034ns`
-- `Slice LUTs = 3794 (11.64%)`
-- `Slice Registers = 5449 (8.36%)`
-- `Block RAM Tile = 4.5 (6.00%)`
-- `DSP = 0`
+- routed timing summary:
+  - `WNS = 5.979ns`
+  - `WHS = 0.011ns`
+- per-clock routed timing:
+  - `i_clk WNS = 7.185ns`
+  - `clk_crypto_gated WNS = 5.979ns`
+  - `clk_crypto_gated WHS = 0.034ns`
+- implementation utilization:
+  - `Slice LUTs = 7444 (22.83%)`
+  - `Slice Registers = 14877 (22.82%)`
+  - `Block RAM Tile = 5 (6.67%)`
+  - `DSPs = 0`
+- routed DRC:
+  - `Violations found = 0`
 
-Fresh RTL verification:
-- `tb_contest_crypto_axis_core`: pass
-- `tb_uart_crypto_probe`: pass
-- `tb_uart_crypto_probe_stream_v3`: pass
+Physical sanity checks from the same fresh build:
+- trace storage remained BRAM-backed: `Block RAM Tile = 5`, not a LUT-heavy fallback
+- LUT memory footprint stayed minimal: `LUT as Memory = 6`
+- high-frequency trace event sources were checked for pulse semantics:
+  - `STREAM_START` uses edge detection
+  - `ACL_BLOCK` uses `axis_acl_block_pulse_w`
+  - fatal trace uses watchdog timeout equality with `!fatal_pending_q`
 
-Fresh CLI smoke on the programmed board:
-- `--query-stats`: pass
-- `--clear-pmu`: pass
-- `--query-pmu`: pass
-  - `clk_hz = 50000000`
-  - all counters cleared to `0`
-- `SM4 16B` known vector: pass
-- `AES 16B` known vector: pass
+Most recent carried board validation from the merged `main` / `P1` baseline:
+- PMU v3 query: pass
+- idle gated counter growth: pass
+- ACL write wake / ACK: pass
+- benign pass-through: pass
+- exact block: pass
+- `SM4` on-chip bench: pass
 
-Fresh GUI worker run on the real board with `512KB` file traffic:
-- `SM4`
-  - file result:
-    - `512KB in 5.331s @ 0.787 Mbps`
-  - derived ratios:
-    - `HW Util = 0.25%`
-    - `UART Stall = 50.55%`
-    - `Credit Block = 0.00%`
-- `AES`
-  - file result:
-    - `512KB in 5.331s @ 0.787 Mbps`
-  - derived ratios:
-    - `HW Util = 0.69%`
-    - `UART Stall = 50.55%`
-    - `Credit Block = 0.00%`
-
-Interpretation of the latest PMU evidence:
-- the current bottleneck is still the UART transmit side and host link behavior
-- the crypto engine is not saturated
-- the streaming window did not become the dominant limiter in the verified `512KB` board run
-
-Fresh ACL runtime path verification:
-- GUI `Deploy Threat Signature`: verified
-- live key-map readback on connect: verified
-- ACL block flash in threat array: verified
-- worker PMU retry after ACL block residual stream error: verified
-- PMU snapshot after ACL event:
-  - `global=16096984`
-  - `crypto_active=0`
-  - `uart_tx_stall=2242`
-  - `credit_block=0`
-  - `acl_events=1`
+Branch-level trace board smoke on `feature/p2-trace-buffer` (`COM12 @ 2,000,000`) completed and passed:
+- trace metadata/page query: pass
+- `ACL_CFG_ACK` and `ACL_BLOCK` readback: pass
+- `BENCH_START` and `BENCH_DONE` readback: pass
+- `FATAL_0x01` persisted after soft-abort and remained readable: pass
+- GUI `Read Trace` rendered `FATAL_0x01`: pass
 
 ## Documentation Entry Points
 
@@ -234,11 +238,12 @@ Fresh ACL runtime path verification:
 
 ## Current Boundaries
 
-- ACL v1 hot update is `1-byte` rule provisioning, not a `16B` signature matcher
+- ACL v2 hot update is `16B` runtime signature provisioning, not persistent storage
 - updates are not persistent across reset or power cycle
 - the board-side transport unit is still `128B`
-- PMU v1.1 provides hardware-side ratios and raw counters, not a standalone hardware Mbps counter
-- GUI rendering can still lag behind sustained traffic; PMU is the authoritative source for bottleneck attribution
+- trace readout is explicit and paged; there is no trace clear command and no background polling path
+- PMU / trace / GUI numbers are observability evidence, not absolute board power measurement
+- trace-specific board smoke has been rerun on this branch; metadata/page readback and GUI `Read Trace` both passed
 
 ## Explicitly Out of Scope
 
@@ -247,4 +252,5 @@ Fresh ACL runtime path verification:
 - full `Ethernet/IP/UDP`
 - persistent ACL storage in flash
 - decryption and unpadding path
-- `16B` sliding-window signature ACL
+- `CDC / GALS`
+- `PUF / hardware key derivation`

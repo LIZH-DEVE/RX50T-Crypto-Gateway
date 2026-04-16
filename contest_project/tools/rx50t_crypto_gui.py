@@ -1,8 +1,9 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from collections import deque
 from datetime import datetime
 from pathlib import Path
+import os
 import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
@@ -40,8 +41,27 @@ from crypto_gateway_worker import GatewayWorker, WorkerEvent
 
 
 class CryptoGatewayApp(tk.Tk):
+    def _init_tk_root(self) -> None:
+        try:
+            super().__init__()
+        except tk.TclError as exc:
+            if "zh_cn.msg" not in str(exc).lower():
+                raise
+            env_backup = {key: os.environ.get(key) for key in ("LANG", "LC_ALL", "LC_MESSAGES")}
+            try:
+                os.environ["LANG"] = "C"
+                os.environ["LC_ALL"] = "C"
+                os.environ["LC_MESSAGES"] = "C"
+                super().__init__()
+            finally:
+                for key, value in env_backup.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+
     def __init__(self) -> None:
-        super().__init__()
+        self._init_tk_root()
         self.title("RX50T Crypto Gateway Console")
         self.geometry("1420x980")
         self.minsize(1260, 860)
@@ -162,6 +182,7 @@ class CryptoGatewayApp(tk.Tk):
             "subtle": "#94a3b8",
             "accent": "#4f8cff",
             "accent_soft": "#16213d",
+            "accent2": "#34d399",
             "good": "#22c55e",
             "warn": "#f59e0b",
             "danger": "#ef4444",
@@ -611,6 +632,9 @@ class CryptoGatewayApp(tk.Tk):
         self._make_action_button(pmu_panel, "Read PMU", self._read_pmu).grid(
             row=0, column=2, sticky="ew", pady=(0, 6)
         )
+        self._make_action_button(pmu_panel, "Read Trace", self._read_trace).grid(
+            row=0, column=3, sticky="ew", padx=(8, 0), pady=(0, 6)
+        )
         metric_strip = tk.Frame(pmu_panel, bg=self.colors["panel_bg"])
         metric_strip.grid(row=1, column=0, columnspan=8, sticky="ew")
         for col in range(8):
@@ -724,6 +748,32 @@ class CryptoGatewayApp(tk.Tk):
         self.log_box.tag_config("warn", foreground="#fdba74")
         self.log_box.tag_config("block", foreground="#fca5a5", font=("Consolas", 10, "bold"))
         self.log_box.tag_config("error", foreground="#fda4af", font=("Consolas", 10, "bold"))
+
+        self.trace_panel = tk.Frame(self.live_log_zone, bg=self.colors["panel_bg"])
+        self.trace_panel.pack(fill="both", expand=False, pady=(10, 0))
+        tk.Label(
+            self.trace_panel,
+            text="TRACE BUFFER",
+            bg=self.colors["panel_bg"],
+            fg="#facc15",
+            font=("Segoe UI", 10, "bold"),
+            anchor="w",
+        ).pack(anchor="w", pady=(0, 6))
+        self.trace_box = scrolledtext.ScrolledText(
+            self.trace_panel,
+            wrap="word",
+            font=("Consolas", 9),
+            bg="#0b0f16",
+            fg=self.colors["text"],
+            insertbackground=self.colors["text"],
+            relief="flat",
+            bd=0,
+            padx=10,
+            pady=8,
+            height=8,
+        )
+        self.trace_box.pack(fill="both", expand=True)
+        self.trace_box.configure(state="disabled")
 
         self.footer_zone = tk.Frame(shell, bg=self.colors["shell_bg"])
         self.footer_zone.grid(row=2, column=0, sticky="nsew", pady=(16, 0))
@@ -945,6 +995,11 @@ class CryptoGatewayApp(tk.Tk):
         self._append_log("Queued: Query PMU")
         self._set_banner("Queued PMU snapshot readback.", "info")
 
+    def _read_trace(self) -> None:
+        self.worker.query_trace()
+        self._append_log("Queued: Query Trace")
+        self._set_banner("Queued trace snapshot readback.", "info")
+
     def _run_bench(self) -> None:
         case = case_run_onchip_bench(self.bench_algo.get())
         self.worker.submit_case(case)
@@ -1151,6 +1206,20 @@ class CryptoGatewayApp(tk.Tk):
             self.bench_vars["mbps"].set(f"{float(effective_mbps):.3f} Mbps")
         self.bench_vars["cycles"].set(str(int(payload.get("cycles", 0))))
         self.bench_vars["crc32"].set(f"0x{int(payload.get('crc32', 0)):08X}")
+
+    def _apply_trace_snapshot(self, payload: dict) -> None:
+        entries = payload.get("entries", [])[-32:]
+        lines = [
+            f"t={float(entry['timestamp_ms']):.3f} ms | {entry['description']}"
+            for entry in entries
+        ]
+        self.trace_box.configure(state="normal")
+        self.trace_box.delete("1.0", "end")
+        if lines:
+            self.trace_box.insert("end", "\n".join(lines))
+        else:
+            self.trace_box.insert("end", "(trace buffer empty)")
+        self.trace_box.configure(state="disabled")
 
     def _apply_pmu_snapshot_to_evidencelive(self, payload: dict) -> None:
         self.evidence_live_vars["hw_util"].set(f"{float(payload['crypto_utilization']) * 100.0:.2f}%")
@@ -1588,6 +1657,13 @@ class CryptoGatewayApp(tk.Tk):
                 "pass" if payload["passed"] else "error",
             )
             self._set_banner("Hardware PMU counters cleared.", "pass" if payload["passed"] else "error")
+        elif kind == "trace_snapshot":
+            self._apply_trace_snapshot(payload)
+            self._append_log(
+                f"TRACE SNAPSHOT: loaded {len(payload.get('entries', []))} entries",
+                "info",
+            )
+            self._set_banner("Trace snapshot loaded.", "info")
         elif kind == "bench_result":
             self._apply_bench_result(payload)
             if payload.get("effective_mbps") is not None:
@@ -1724,4 +1800,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 

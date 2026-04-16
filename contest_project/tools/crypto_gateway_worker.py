@@ -24,6 +24,7 @@ from crypto_gateway_protocol import (
     build_frame,
     case_clear_pmu,
     case_query_pmu,
+    query_trace_snapshot_on_serial,
     build_stream_capability_query,
     build_stream_chunk_frame,
     build_stream_start_frame,
@@ -286,6 +287,9 @@ class GatewayWorker:
     def submit_case(self, case, timeout_s: float = 3.0) -> None:
         self._task_q.put(("run_case", {"case": case, "timeout_s": timeout_s}))
 
+    def query_trace(self, timeout_s: float = 3.0) -> None:
+        self._task_q.put(("query_trace", {"timeout_s": timeout_s}))
+
     def encrypt_file(self, input_path: str, algo: str, timeout_s: float = 3.0) -> None:
         self._task_q.put(
             (
@@ -343,6 +347,8 @@ class GatewayWorker:
                     self._handle_disconnect()
                 elif kind == "run_case":
                     self._handle_case(payload["case"], float(payload["timeout_s"]))
+                elif kind == "query_trace":
+                    self._handle_trace_query(float(payload["timeout_s"]))
                 elif kind == "encrypt_file":
                     self._handle_encrypt_file(
                         payload["input_path"],
@@ -540,6 +546,28 @@ class GatewayWorker:
             stats=result.stats,
             rule_stats=result.rule_stats,
             description=case.description,
+        )
+
+    def _handle_trace_query(self, timeout_s: float) -> None:
+        ser = self._ensure_serial()
+        snapshot = query_trace_snapshot_on_serial(ser, timeout_s)
+        self._emit(
+            "trace_snapshot",
+            valid_entries=snapshot.meta.valid_entries,
+            write_ptr=snapshot.meta.write_ptr,
+            wrapped=snapshot.meta.wrapped,
+            enabled=snapshot.meta.enabled,
+            entries=[
+                {
+                    "timestamp_ms": entry.timestamp_ms,
+                    "event_code": entry.event_code,
+                    "event_name": entry.event_name,
+                    "arg0": entry.arg0,
+                    "arg1": entry.arg1,
+                    "description": entry.describe(),
+                }
+                for entry in snapshot.entries
+            ],
         )
 
     def _emit_bench_result(self, result, snapshot: PmuSnapshot | None = None) -> None:

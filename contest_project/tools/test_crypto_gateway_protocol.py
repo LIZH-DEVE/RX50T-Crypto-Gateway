@@ -12,6 +12,9 @@ from crypto_gateway_protocol import (
     AclV2WriteAck,
     AclWriteAck,
     BenchResult,
+    TraceEntry,
+    TraceMeta,
+    TracePage,
     FatalErrorResponse,
     FileChunkPlan,
     PmuClearAck,
@@ -32,6 +35,8 @@ from crypto_gateway_protocol import (
     build_stream_chunk_frame,
     build_stream_start_frame,
     case_query_pmu,
+    case_query_trace_meta,
+    case_query_trace_page,
     case_run_onchip_bench,
     case_acl_v2_hit_counters,
     case_acl_v2_keymap,
@@ -56,6 +61,9 @@ from crypto_gateway_protocol import (
     parse_bench_result_response,
     parse_pmu_clear_ack,
     parse_pmu_snapshot_response,
+    parse_trace_meta_response,
+    parse_trace_page_response,
+    reconstruct_trace_entries,
     parse_rule_byte_input,
     parse_rule_stats_response,
     parse_stats_response,
@@ -212,6 +220,63 @@ class CryptoGatewayProtocolTests(unittest.TestCase):
         self.assertEqual(case.response_mode, "framed")
         self.assertEqual(case.response_opcode, 0x50)
 
+    def test_case_query_trace_meta_builds_query_frame(self) -> None:
+        case = case_query_trace_meta()
+        self.assertEqual(case.tx, bytes([0x55, 0x01, 0x54]))
+        self.assertEqual(case.response_mode, "framed")
+        self.assertEqual(case.response_opcode, 0x54)
+
+    def test_case_query_trace_page_builds_query_frame(self) -> None:
+        case = case_query_trace_page(3)
+        self.assertEqual(case.tx, bytes([0x55, 0x02, 0x54, 0x03]))
+        self.assertEqual(case.response_mode, "framed")
+        self.assertEqual(case.response_opcode, 0x54)
+
+    def test_parse_trace_meta_response(self) -> None:
+        meta = parse_trace_meta_response(bytes.fromhex('55 06 54 01 00 14 34 03'))
+        self.assertEqual(meta, TraceMeta(version=1, valid_entries=20, write_ptr=0x34, flags=0x03))
+        self.assertTrue(meta.wrapped)
+        self.assertTrue(meta.enabled)
+
+    def test_parse_trace_page_response(self) -> None:
+        entries = tuple(TraceEntry(timestamp_ms=i, event_code=0x08, arg0=0, arg1=i) for i in range(16))
+        page = parse_trace_page_response(TracePage(page_idx=2, entry_count=16, flags=0x03, entries=entries).as_bytes())
+        self.assertEqual(page.page_idx, 2)
+        self.assertEqual(page.entry_count, 16)
+        self.assertEqual(page.flags, 0x03)
+        self.assertEqual(page.entries[5], entries[5])
+
+    def test_reconstruct_trace_entries_handles_wrapped_ring(self) -> None:
+        meta = TraceMeta(version=1, valid_entries=4, write_ptr=2, flags=0x03)
+        page0_entries = [TraceEntry(timestamp_ms=300 + i, event_code=0x08, arg0=0, arg1=i) for i in range(16)]
+        page1_entries = [TraceEntry(timestamp_ms=400 + i, event_code=0x09, arg0=0, arg1=i) for i in range(16)]
+        empty = tuple(TraceEntry(timestamp_ms=0, event_code=0, arg0=0, arg1=0) for _ in range(16))
+        pages = [
+            TracePage(page_idx=0, entry_count=16, flags=0x03, entries=tuple(page0_entries)),
+            TracePage(page_idx=1, entry_count=16, flags=0x03, entries=tuple(page1_entries)),
+        ]
+        for idx in range(2, 16):
+            pages.append(TracePage(page_idx=idx, entry_count=0, flags=0x03, entries=empty))
+        entries = reconstruct_trace_entries(meta, tuple(pages))
+        self.assertEqual([entry.timestamp_ms for entry in entries], [302, 303, 304, 305])
+
+    def test_reconstruct_trace_entries_handles_nonwrapped_second_page(self) -> None:
+        meta = TraceMeta(version=1, valid_entries=17, write_ptr=17, flags=0x02)
+        page0_entries = tuple(TraceEntry(timestamp_ms=100 + i, event_code=0x08, arg0=0, arg1=i) for i in range(16))
+        page1_first = TraceEntry(timestamp_ms=200, event_code=0x04, arg0=1, arg1=0)
+        empty_entry = TraceEntry(timestamp_ms=0, event_code=0, arg0=0, arg1=0)
+        page1_entries = (page1_first,) + tuple(empty_entry for _ in range(15))
+        pages = [
+            TracePage(page_idx=0, entry_count=16, flags=0x02, entries=page0_entries),
+            TracePage(page_idx=1, entry_count=1, flags=0x02, entries=page1_entries),
+        ]
+        for idx in range(2, 16):
+            pages.append(TracePage(page_idx=idx, entry_count=0, flags=0x02, entries=tuple(empty_entry for _ in range(16))))
+        entries = reconstruct_trace_entries(meta, tuple(pages))
+        self.assertEqual(len(entries), 17)
+        self.assertEqual(entries[0], page0_entries[0])
+        self.assertEqual(entries[15], page0_entries[15])
+        self.assertEqual(entries[16], page1_first)
     def test_case_clear_pmu_builds_clear_frame(self) -> None:
         case = case_clear_pmu()
         self.assertEqual(case.tx, bytes([0x55, 0x01, 0x4A]))

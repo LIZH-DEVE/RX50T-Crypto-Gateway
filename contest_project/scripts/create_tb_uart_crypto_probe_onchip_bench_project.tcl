@@ -37,6 +37,7 @@ set source_files [list \
     [file join $contest_root rtl contest contest_axis_block_unpacker.sv] \
     [file join $contest_root rtl contest contest_crypto_block_engine.sv] \
     [file join $contest_root rtl contest contest_crypto_axis_core.sv] \
+    [file join $contest_root rtl contest contest_trace_buffer.sv] \
     [file join $contest_root rtl contest contest_uart_crypto_probe.sv] \
     [file join $contest_root rtl contest rx50t_uart_crypto_probe_top.sv] \
 ]
@@ -53,3 +54,4 @@ run all
 close_sim
 close_project
 exit
+

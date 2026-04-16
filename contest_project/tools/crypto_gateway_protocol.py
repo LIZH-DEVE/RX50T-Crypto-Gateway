@@ -153,6 +153,159 @@ class AclV2HitCounters:
         return {i: count for i, count in enumerate(self.counts)}
 
 
+
+TRACE_DEPTH = 256
+TRACE_PAGE_ENTRIES = 16
+TRACE_PAGE_COUNT = TRACE_DEPTH // TRACE_PAGE_ENTRIES
+
+TRACE_EVT_STREAM_START = 0x01
+TRACE_EVT_STREAM_STOP = 0x02
+TRACE_EVT_ACL_BLOCK = 0x03
+TRACE_EVT_FATAL = 0x04
+TRACE_EVT_BENCH_START = 0x05
+TRACE_EVT_BENCH_DONE = 0x06
+TRACE_EVT_ACL_CFG_ACK = 0x07
+TRACE_EVT_CLOCK_GATED = 0x08
+TRACE_EVT_CLOCK_ACTIVE = 0x09
+
+
+@dataclass(frozen=True)
+class TraceEntry:
+    timestamp_ms: int
+    event_code: int
+    arg0: int
+    arg1: int
+
+    @classmethod
+    def from_bytes(cls, raw: bytes) -> "TraceEntry":
+        if len(raw) != 8:
+            raise ValueError("Trace entry must be exactly 8 bytes")
+        return cls(
+            timestamp_ms=int.from_bytes(raw[0:4], "big"),
+            event_code=raw[4],
+            arg0=raw[5],
+            arg1=int.from_bytes(raw[6:8], "big"),
+        )
+
+    def as_bytes(self) -> bytes:
+        return (
+            self.timestamp_ms.to_bytes(4, "big")
+            + bytes([self.event_code, self.arg0])
+            + self.arg1.to_bytes(2, "big")
+        )
+
+    @property
+    def event_name(self) -> str:
+        names = {
+            TRACE_EVT_STREAM_START: "STREAM_START",
+            TRACE_EVT_STREAM_STOP: "STREAM_STOP",
+            TRACE_EVT_ACL_BLOCK: "ACL_BLOCK",
+            TRACE_EVT_FATAL: "FATAL",
+            TRACE_EVT_BENCH_START: "BENCH_START",
+            TRACE_EVT_BENCH_DONE: "BENCH_DONE",
+            TRACE_EVT_ACL_CFG_ACK: "ACL_CFG_ACK",
+            TRACE_EVT_CLOCK_GATED: "CLOCK_GATED",
+            TRACE_EVT_CLOCK_ACTIVE: "CLOCK_ACTIVE",
+        }
+        return names.get(self.event_code, f"UNKNOWN_0x{self.event_code:02X}")
+
+    def describe(self) -> str:
+        if self.event_code == TRACE_EVT_STREAM_START:
+            algo = "AES" if (self.arg0 & 0x1) else "SM4"
+            return f"STREAM_START algo={algo} chunks={self.arg1}"
+        if self.event_code == TRACE_EVT_STREAM_STOP:
+            status_names = {0: "OK", 1: "BLOCK", 2: "ERROR", 3: "FATAL"}
+            status = status_names.get(self.arg0, f"0x{self.arg0:02X}")
+            return f"STREAM_STOP status={status} acked={self.arg1}"
+        if self.event_code == TRACE_EVT_ACL_BLOCK:
+            return f"ACL_BLOCK slot={self.arg0}"
+        if self.event_code == TRACE_EVT_FATAL:
+            reasons = {0x01: "Stream Watchdog Timeout", 0x02: "Crypto Watchdog Timeout"}
+            return f"FATAL_0x{self.arg0:02X} {reasons.get(self.arg0, 'Unknown Fatal')}"
+        if self.event_code == TRACE_EVT_BENCH_START:
+            algo = "AES" if (self.arg0 & 0x1) else "SM4"
+            forced = 1 if (self.arg0 & 0x2) else 0
+            return f"BENCH_START algo={algo} force={forced} kib={self.arg1}"
+        if self.event_code == TRACE_EVT_BENCH_DONE:
+            status_names = {0: "OK", 1: "BUSY", 2: "TIMEOUT", 3: "INTERNAL", 4: "NO_RESULT"}
+            algo = "AES" if (self.arg1 & 0x1) else "SM4"
+            status = status_names.get(self.arg0, f"0x{self.arg0:02X}")
+            return f"BENCH_DONE status={status} algo={algo}"
+        if self.event_code == TRACE_EVT_ACL_CFG_ACK:
+            return f"ACL_CFG_ACK slot={self.arg0}"
+        if self.event_code == TRACE_EVT_CLOCK_GATED:
+            return "CLOCK_GATED"
+        if self.event_code == TRACE_EVT_CLOCK_ACTIVE:
+            return "CLOCK_ACTIVE"
+        return f"{self.event_name} arg0=0x{self.arg0:02X} arg1=0x{self.arg1:04X}"
+
+
+@dataclass(frozen=True)
+class TraceMeta:
+    version: int
+    valid_entries: int
+    write_ptr: int
+    flags: int
+
+    def as_bytes(self) -> bytes:
+        return bytes([0x55, 0x06, 0x54, self.version]) + self.valid_entries.to_bytes(2, "big") + bytes([self.write_ptr, self.flags])
+
+    @property
+    def wrapped(self) -> bool:
+        return bool(self.flags & 0x1)
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.flags & 0x2)
+
+
+@dataclass(frozen=True)
+class TracePage:
+    page_idx: int
+    entry_count: int
+    flags: int
+    entries: tuple[TraceEntry, ...]
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.page_idx < TRACE_PAGE_COUNT:
+            raise ValueError("Trace page index out of range")
+        if not 0 <= self.entry_count <= TRACE_PAGE_ENTRIES:
+            raise ValueError("Trace page entry count out of range")
+        if len(self.entries) != TRACE_PAGE_ENTRIES:
+            raise ValueError("Trace page must contain exactly 16 entries")
+
+    def as_bytes(self) -> bytes:
+        payload = bytearray([0x55, 0x85, 0x54, 0x02, self.page_idx, self.entry_count, self.flags])
+        for entry in self.entries:
+            payload.extend(entry.as_bytes())
+        return bytes(payload)
+
+
+def reconstruct_trace_entries(meta: TraceMeta, pages: tuple[TracePage, ...]) -> tuple[TraceEntry, ...]:
+    page_map = {page.page_idx: page for page in pages}
+    for idx in range(TRACE_PAGE_COUNT):
+        if idx not in page_map:
+            raise ValueError(f"missing trace page {idx}")
+    flat = []
+    for page_idx in range(TRACE_PAGE_COUNT):
+        flat.extend(page_map[page_idx].entries)
+    valid = min(meta.valid_entries, TRACE_DEPTH)
+    if valid <= 0:
+        return tuple()
+    if meta.wrapped:
+        start = meta.write_ptr % TRACE_DEPTH
+        ordered = flat[start:] + flat[:start]
+        return tuple(ordered[:valid])
+    return tuple(flat[:valid])
+
+
+@dataclass(frozen=True)
+class TraceSnapshot:
+    meta: TraceMeta
+    pages: tuple[TracePage, ...]
+    entries: tuple[TraceEntry, ...]
+
+
 @dataclass(frozen=True)
 class PmuSnapshot:
     clk_hz: int
@@ -292,6 +445,8 @@ class ProbeResult:
     acl_v2_write_ack: AclV2WriteAck | None = None
     acl_v2_key_map: AclV2KeyMap | None = None
     acl_v2_hits: AclV2HitCounters | None = None
+    trace_meta: TraceMeta | None = None
+    trace_page: TracePage | None = None
     pmu_snapshot: PmuSnapshot | None = None
     pmu_clear_ack: PmuClearAck | None = None
     bench_result: BenchResult | None = None
@@ -479,6 +634,33 @@ def parse_acl_v2_hits_response(raw: bytes) -> AclV2HitCounters:
         offset = 3 + i * 4
         counts.append(int.from_bytes(raw[offset:offset + 4], "big"))
     return AclV2HitCounters(tuple(counts))
+
+
+
+def parse_trace_meta_response(raw: bytes) -> TraceMeta:
+    if len(raw) != 8 or raw[0] != 0x55 or raw[1] != 0x06 or raw[2] != 0x54 or raw[3] != 0x01:
+        raise ValueError(f"invalid trace meta response: {format_hex(raw)}")
+    return TraceMeta(
+        version=raw[3],
+        valid_entries=int.from_bytes(raw[4:6], "big"),
+        write_ptr=raw[6],
+        flags=raw[7],
+    )
+
+
+def parse_trace_page_response(raw: bytes) -> TracePage:
+    if len(raw) != 135 or raw[0] != 0x55 or raw[1] != 0x85 or raw[2] != 0x54 or raw[3] != 0x02:
+        raise ValueError(f"invalid trace page response: {format_hex(raw)}")
+    entries = []
+    for i in range(TRACE_PAGE_ENTRIES):
+        offset = 7 + i * 8
+        entries.append(TraceEntry.from_bytes(raw[offset:offset + 8]))
+    return TracePage(
+        page_idx=raw[4],
+        entry_count=raw[5],
+        flags=raw[6],
+        entries=tuple(entries),
+    )
 
 
 def parse_pmu_snapshot_response(raw: bytes) -> PmuSnapshot:
@@ -905,6 +1087,35 @@ def case_acl_v2_hit_counters(expected: AclV2HitCounters | None = None) -> ProbeC
     )
 
 
+
+def case_query_trace_meta(expected: TraceMeta | None = None) -> ProbeCase:
+    return ProbeCase(
+        name="Query Trace Metadata",
+        tx=build_frame(bytes([0x54])),
+        response_len=0,
+        expected=expected.as_bytes() if expected else None,
+        description="Trace ring metadata readback",
+        kind="trace_meta",
+        response_mode="framed",
+        response_opcode=0x54,
+    )
+
+
+def case_query_trace_page(page_idx: int, expected: TracePage | None = None) -> ProbeCase:
+    if not 0 <= page_idx < TRACE_PAGE_COUNT:
+        raise ValueError("Trace page index must be in 0..15")
+    return ProbeCase(
+        name=f"Query Trace Page {page_idx}",
+        tx=build_frame(bytes([0x54, page_idx])),
+        response_len=0,
+        expected=expected.as_bytes() if expected else None,
+        description=f"Trace ring page {page_idx} readback",
+        kind="trace_page",
+        response_mode="framed",
+        response_opcode=0x54,
+    )
+
+
 def case_query_pmu(expected: PmuSnapshot | None = None) -> ProbeCase:
     return ProbeCase(
         name="Query PMU",
@@ -1008,6 +1219,11 @@ def run_case_on_serial(
     rule_stats = None
     acl_write_ack = None
     acl_key_map = None
+    acl_v2_write_ack = None
+    acl_v2_key_map = None
+    acl_v2_hits = None
+    trace_meta = None
+    trace_page = None
     pmu_snapshot = None
     pmu_clear_ack = None
     bench_result = None
@@ -1054,6 +1270,18 @@ def run_case_on_serial(
             passed = case.expected is None or rx == case.expected
         except ValueError:
             passed = False
+    elif case.kind == "trace_meta":
+        try:
+            trace_meta = parse_trace_meta_response(rx)
+            passed = case.expected is None or rx == case.expected
+        except ValueError:
+            passed = False
+    elif case.kind == "trace_page":
+        try:
+            trace_page = parse_trace_page_response(rx)
+            passed = case.expected is None or rx == case.expected
+        except ValueError:
+            passed = False
     elif case.kind == "pmu_query":
         try:
             pmu_snapshot = parse_pmu_snapshot_response(rx)
@@ -1084,6 +1312,8 @@ def run_case_on_serial(
             rule_stats = None
             acl_write_ack = None
             acl_key_map = None
+            trace_meta = None
+            trace_page = None
             pmu_snapshot = None
             pmu_clear_ack = None
             bench_result = None
@@ -1099,11 +1329,33 @@ def run_case_on_serial(
         rule_stats=rule_stats,
         acl_write_ack=acl_write_ack,
         acl_key_map=acl_key_map,
+        acl_v2_write_ack=acl_v2_write_ack,
+        acl_v2_key_map=acl_v2_key_map,
+        acl_v2_hits=acl_v2_hits,
+        trace_meta=trace_meta,
+        trace_page=trace_page,
         pmu_snapshot=pmu_snapshot,
         pmu_clear_ack=pmu_clear_ack,
         bench_result=bench_result,
         fatal_error=fatal_error,
     )
+
+
+def query_trace_snapshot_on_serial(
+    ser: serial.Serial,
+    timeout_s: float = 3.0,
+) -> TraceSnapshot:
+    meta_result = run_case_on_serial(ser, case_query_trace_meta(), timeout_s)
+    if meta_result.trace_meta is None:
+        raise RuntimeError("missing trace metadata response")
+    pages = []
+    for page_idx in range(TRACE_PAGE_COUNT):
+        page_result = run_case_on_serial(ser, case_query_trace_page(page_idx), timeout_s)
+        if page_result.trace_page is None:
+            raise RuntimeError(f"missing trace page {page_idx} response")
+        pages.append(page_result.trace_page)
+    entries = reconstruct_trace_entries(meta_result.trace_meta, tuple(pages))
+    return TraceSnapshot(meta=meta_result.trace_meta, pages=tuple(pages), entries=entries)
 
 
 def run_host_case_on_serial(

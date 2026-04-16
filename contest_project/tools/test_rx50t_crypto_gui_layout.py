@@ -149,6 +149,45 @@ class CryptoGatewayGuiLayoutTests(unittest.TestCase):
         finally:
             app.destroy()
 
+    def test_trace_panel_renders_trace_snapshot(self) -> None:
+        app = gui.CryptoGatewayApp()
+        try:
+            self.assertTrue(hasattr(app, "trace_box"))
+            app._handle_event(
+                gui.WorkerEvent(
+                    kind="trace_snapshot",
+                    payload={
+                        "valid_entries": 2,
+                        "write_ptr": 2,
+                        "wrapped": False,
+                        "enabled": True,
+                        "entries": [
+                            {
+                                "timestamp_ms": 100,
+                                "event_code": 0x08,
+                                "event_name": "CLOCK_GATED",
+                                "arg0": 0,
+                                "arg1": 0,
+                                "description": "CLOCK_GATED",
+                            },
+                            {
+                                "timestamp_ms": 125,
+                                "event_code": 0x07,
+                                "event_name": "ACL_CFG_ACK",
+                                "arg0": 2,
+                                "arg1": 0,
+                                "description": "ACL_CFG_ACK slot=2",
+                            },
+                        ],
+                    },
+                )
+            )
+            rendered = app.trace_box.get("1.0", "end").strip()
+            self.assertIn("t=100.000 ms | CLOCK_GATED", rendered)
+            self.assertIn("t=125.000 ms | ACL_CFG_ACK slot=2", rendered)
+        finally:
+            app.destroy()
+
     def test_benchmark_panel_exists_and_bench_event_does_not_touch_uart_throughput(self) -> None:
         app = gui.CryptoGatewayApp()
         try:
@@ -372,6 +411,23 @@ class CryptoGatewayGuiLayoutTests(unittest.TestCase):
                 self.assertIs(after.call_args.args[1].__self__, app)
                 self.assertEqual(after.call_args.args[1].__func__, app._sample_throughput.__func__)
                 self.assertEqual(app.throughput_sample_job, "sample_job")
+        finally:
+            app.destroy()
+    def test_acl_v2_hits_event_updates_heatmap_without_theme_key_error(self) -> None:
+        app = gui.CryptoGatewayApp()
+        try:
+            app._handle_event(
+                gui.WorkerEvent(
+                    kind="acl_v2_hits",
+                    payload={
+                        "rx": bytes.fromhex("55 21 48"),
+                        "duration_s": 0.001,
+                        "passed": True,
+                        "counts": (0, 1, 0, 0, 0, 0, 0, 0),
+                    },
+                )
+            )
+            self.assertEqual(app.acl_rule_hit_labels[1].cget("text"), "1")
         finally:
             app.destroy()
     def test_runtime_error_does_not_open_modal_dialog(self) -> None:
