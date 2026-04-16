@@ -182,6 +182,7 @@ class CryptoGatewayApp(tk.Tk):
             "subtle": "#94a3b8",
             "accent": "#4f8cff",
             "accent_soft": "#16213d",
+            "accent2": "#34d399",
             "good": "#22c55e",
             "warn": "#f59e0b",
             "danger": "#ef4444",

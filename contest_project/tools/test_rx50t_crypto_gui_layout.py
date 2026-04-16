@@ -413,6 +413,23 @@ class CryptoGatewayGuiLayoutTests(unittest.TestCase):
                 self.assertEqual(app.throughput_sample_job, "sample_job")
         finally:
             app.destroy()
+    def test_acl_v2_hits_event_updates_heatmap_without_theme_key_error(self) -> None:
+        app = gui.CryptoGatewayApp()
+        try:
+            app._handle_event(
+                gui.WorkerEvent(
+                    kind="acl_v2_hits",
+                    payload={
+                        "rx": bytes.fromhex("55 21 48"),
+                        "duration_s": 0.001,
+                        "passed": True,
+                        "counts": (0, 1, 0, 0, 0, 0, 0, 0),
+                    },
+                )
+            )
+            self.assertEqual(app.acl_rule_hit_labels[1].cget("text"), "1")
+        finally:
+            app.destroy()
     def test_runtime_error_does_not_open_modal_dialog(self) -> None:
         app = gui.CryptoGatewayApp()
         try:

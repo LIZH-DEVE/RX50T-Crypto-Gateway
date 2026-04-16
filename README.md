@@ -221,7 +221,12 @@ Most recent carried board validation from the merged `main` / `P1` baseline:
 - exact block: pass
 - `SM4` on-chip bench: pass
 
-Trace-specific board smoke has not yet been rerun on this `P2` branch. This README does not claim fresh board-side trace readback until that smoke is executed.
+Branch-level trace board smoke on `feature/p2-trace-buffer` (`COM12 @ 2,000,000`) completed and passed:
+- trace metadata/page query: pass
+- `ACL_CFG_ACK` and `ACL_BLOCK` readback: pass
+- `BENCH_START` and `BENCH_DONE` readback: pass
+- `FATAL_0x01` persisted after soft-abort and remained readable: pass
+- GUI `Read Trace` rendered `FATAL_0x01`: pass
 
 ## Documentation Entry Points
 
@@ -238,7 +243,7 @@ Trace-specific board smoke has not yet been rerun on this `P2` branch. This READ
 - the board-side transport unit is still `128B`
 - trace readout is explicit and paged; there is no trace clear command and no background polling path
 - PMU / trace / GUI numbers are observability evidence, not absolute board power measurement
-- trace-specific board smoke is still pending on this branch
+- trace-specific board smoke has been rerun on this branch; metadata/page readback and GUI `Read Trace` both passed
 
 ## Explicitly Out of Scope
 
