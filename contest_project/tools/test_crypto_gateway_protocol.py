@@ -136,10 +136,12 @@ class CryptoGatewayProtocolTests(unittest.TestCase):
             uart_tx_stall_cycles=256,
             stream_credit_block_cycles=128,
             acl_block_events=0,
-            version=0x02,
+            version=0x03,
             stream_bytes_in=1024,
             stream_bytes_out=768,
             stream_chunk_count=6,
+            crypto_clock_gated_cycles=320,
+            crypto_clock_status_flags=0x0000_0000_0000_0003,
         )
 
     def test_build_frame_wraps_payload(self) -> None:
@@ -332,6 +334,32 @@ class CryptoGatewayProtocolTests(unittest.TestCase):
         self.assertEqual(snapshot.stream_bytes_in, 2048)
         self.assertEqual(snapshot.stream_bytes_out, 1920)
         self.assertEqual(snapshot.stream_chunk_count, 16)
+
+    def test_parse_pmu_snapshot_response_v3(self) -> None:
+        snapshot = parse_pmu_snapshot_response(
+            bytes.fromhex(
+                "55 56 50 03"
+                " 02 FA F0 80"
+                " 00 00 00 00 00 00 10 00"
+                " 00 00 00 00 00 00 04 00"
+                " 00 00 00 00 00 00 02 00"
+                " 00 00 00 00 00 00 01 00"
+                " 00 00 00 00 00 00 00 03"
+                " 00 00 00 00 00 00 08 00"
+                " 00 00 00 00 00 00 07 80"
+                " 00 00 00 00 00 00 00 10"
+                " 00 00 00 00 00 00 03 20"
+                " 00 00 00 00 00 00 00 03"
+            )
+        )
+        self.assertEqual(snapshot.version, 0x03)
+        self.assertEqual(snapshot.crypto_clock_gated_cycles, 800)
+        self.assertEqual(snapshot.crypto_clock_status_flags, 0x03)
+
+    def test_sample_pmu_snapshot_v3_roundtrip(self) -> None:
+        snapshot = self._sample_pmu_snapshot()
+        parsed = parse_pmu_snapshot_response(snapshot.as_bytes())
+        self.assertEqual(parsed, snapshot)
 
     def test_parse_pmu_clear_ack(self) -> None:
         ack = parse_pmu_clear_ack(bytes([0x55, 0x02, 0x4A, 0x00]))

@@ -14,7 +14,8 @@ module contest_axis_block_unpacker (
     output wire         m_axis_tvalid,
     input  wire         m_axis_tready,
     output wire [7:0]   m_axis_tdata,
-    output wire         m_axis_tlast
+    output wire         m_axis_tlast,
+    output wire         o_idle
 );
 
     reg [127:0] block_data_q;
@@ -38,6 +39,9 @@ module contest_axis_block_unpacker (
     assign m_axis_tlast  = block_valid_q &&
                            block_last_q &&
                            (byte_idx_q == (block_valid_bytes_q - 5'd1));
+    assign o_idle        = !block_valid_q &&
+                           (byte_idx_q == 5'd0) &&
+                           (block_valid_bytes_q == 5'd0);
 
     always @(posedge i_clk) begin
         if (!i_rst_n) begin

@@ -594,6 +594,10 @@ class GatewayWorker:
             stream_bytes_in=snapshot.stream_bytes_in,
             stream_bytes_out=snapshot.stream_bytes_out,
             stream_chunk_count=snapshot.stream_chunk_count,
+            crypto_clock_gated_cycles=snapshot.crypto_clock_gated_cycles,
+            crypto_clock_status_flags=snapshot.crypto_clock_status_flags,
+            crypto_clock_is_gated=snapshot.clock_is_gated,
+            crypto_clock_gating_enabled=snapshot.clock_gating_enabled,
         )
 
     def _query_pmu_after_session(

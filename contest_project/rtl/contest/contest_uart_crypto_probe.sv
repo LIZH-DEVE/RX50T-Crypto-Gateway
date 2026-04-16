@@ -64,6 +64,8 @@ module contest_uart_crypto_probe #(
     localparam integer STREAM_WDG_TIMEOUT = CLK_HZ;
     localparam integer CRYPTO_WDG_TIMEOUT = CLK_HZ / 20;
     localparam [2:0] QUIESCE_CYCLES = 3'd4;
+    localparam [4:0] CRYPTO_SLEEP_HOLDOFF = 5'd16;
+    localparam [1:0] CRYPTO_WAKE_SETTLE_CYCLES = 2'd2;
 
     localparam [2:0] BENCH_IDLE       = 3'd0;
     localparam [2:0] BENCH_PICK_HEAD  = 3'd1;
@@ -333,7 +335,9 @@ module contest_uart_crypto_probe #(
         input [63:0] acl_block_events,
         input [63:0] stream_bytes_in,
         input [63:0] stream_bytes_out,
-        input [63:0] stream_chunk_count
+        input [63:0] stream_chunk_count,
+        input [63:0] crypto_clock_gated_cycles,
+        input [63:0] crypto_clock_status_flags
     );
         begin
             case (kind)
@@ -348,9 +352,9 @@ module contest_uart_crypto_probe #(
                 PMU_TX_SNAPSHOT: begin
                     case (idx)
                         7'd0: pmu_tx_byte = 8'h55;
-                        7'd1: pmu_tx_byte = 8'h46;
+                        7'd1: pmu_tx_byte = 8'h56;
                         7'd2: pmu_tx_byte = ASCII_PMU_QRY;
-                        7'd3: pmu_tx_byte = 8'h02;
+                        7'd3: pmu_tx_byte = 8'h03;
                         7'd4,
                         7'd5,
                         7'd6,
@@ -419,6 +423,22 @@ module contest_uart_crypto_probe #(
                         7'd69,
                         7'd70,
                         7'd71: pmu_tx_byte = be64_byte(idx[2:0], stream_chunk_count);
+                        7'd72,
+                        7'd73,
+                        7'd74,
+                        7'd75,
+                        7'd76,
+                        7'd77,
+                        7'd78,
+                        7'd79: pmu_tx_byte = be64_byte(idx[2:0], crypto_clock_gated_cycles);
+                        7'd80,
+                        7'd81,
+                        7'd82,
+                        7'd83,
+                        7'd84,
+                        7'd85,
+                        7'd86,
+                        7'd87: pmu_tx_byte = be64_byte(idx[2:0], crypto_clock_status_flags);
                         default: pmu_tx_byte = 8'h00;
                     endcase
                 end
@@ -430,7 +450,7 @@ module contest_uart_crypto_probe #(
     function automatic [6:0] pmu_tx_last_idx(input [1:0] kind);
         begin
             case (kind)
-                PMU_TX_SNAPSHOT:  pmu_tx_last_idx = 7'd71;
+                PMU_TX_SNAPSHOT:  pmu_tx_last_idx = 7'd87;
                 PMU_TX_CLEAR_ACK: pmu_tx_last_idx = 7'd3;
                 default:          pmu_tx_last_idx = 7'd0;
             endcase
@@ -617,6 +637,9 @@ module contest_uart_crypto_probe #(
     reg        acl_cfg_valid_q;
     reg  [2:0] acl_cfg_index_q;
     reg  [127:0] acl_cfg_key_q;
+    reg        acl_cfg_pending_q;
+    reg  [2:0] acl_cfg_pending_index_q;
+    reg  [127:0] acl_cfg_pending_key_q;
     reg  [2:0] pending_cfg_ack_idx_q;
     reg  [127:0] pending_cfg_ack_key_q;
     reg        pending_error_q;
@@ -668,6 +691,7 @@ module contest_uart_crypto_probe #(
     reg [63:0] pmu_stream_bytes_in_q;
     reg [63:0] pmu_stream_bytes_out_q;
     reg [63:0] pmu_stream_chunk_count_q;
+    reg [63:0] pmu_crypto_clock_gated_cycles_q;
     reg [63:0] pmu_snap_global_cycles_q;
     reg [63:0] pmu_snap_crypto_active_cycles_q;
     reg [63:0] pmu_snap_uart_tx_stall_cycles_q;
@@ -676,6 +700,8 @@ module contest_uart_crypto_probe #(
     reg [63:0] pmu_snap_stream_bytes_in_q;
     reg [63:0] pmu_snap_stream_bytes_out_q;
     reg [63:0] pmu_snap_stream_chunk_count_q;
+    reg [63:0] pmu_snap_crypto_clock_gated_cycles_q;
+    reg [63:0] pmu_snap_crypto_clock_status_flags_q;
     reg        pmu_pending_q;
     reg  [1:0] pmu_pending_kind_q;
     reg  [1:0] pmu_tx_kind_q;
@@ -688,6 +714,8 @@ module contest_uart_crypto_probe #(
     reg [63:0] pmu_tx_stream_bytes_in_q;
     reg [63:0] pmu_tx_stream_bytes_out_q;
     reg [63:0] pmu_tx_stream_chunk_count_q;
+    reg [63:0] pmu_tx_crypto_clock_gated_cycles_q;
+    reg [63:0] pmu_tx_crypto_clock_status_flags_q;
     reg  [2:0] bench_state_q;
     reg  [4:0] bench_tx_idx_q;
     reg  [3:0] bench_pick_idx_q;
@@ -754,6 +782,13 @@ module contest_uart_crypto_probe #(
     reg [31:0] crypto_wdg_counter_q;
     reg        fatal_tx_active_q;
     reg  [1:0] fatal_tx_idx_q;
+    reg        crypto_wake_req_q;
+    reg        crypto_clk_ce_q;
+    reg        crypto_clock_gated_q;
+    reg  [4:0] crypto_sleep_count_q;
+    reg  [1:0] crypto_wake_settle_count_q;
+    reg        crypto_idle_sync1_q;
+    reg        crypto_idle_sync2_q;
     wire       ctrl_tx_valid_w;
     wire [7:0] ctrl_tx_data_w;
     wire       ctrl_tx_last_w;
@@ -785,6 +820,13 @@ module contest_uart_crypto_probe #(
     wire       pmu_last_fire_w;
     wire       ctrl_last_fire_w;
     wire       stream_last_fire_w;
+    wire       clk_crypto_gated;
+    wire       crypto_clock_idle_w;
+    wire       crypto_idle_sync_w;
+    wire       crypto_wake_event_w;
+    wire       crypto_clk_ce_w;
+    wire       crypto_datapath_ready_w;
+    wire [63:0] pmu_crypto_clock_status_flags_w;
 
     assign pmu_tx_active_w    = (pmu_tx_kind_q != PMU_TX_NONE);
     assign pmu_tx_data_w      = pmu_tx_byte(
@@ -797,7 +839,9 @@ module contest_uart_crypto_probe #(
                                     pmu_tx_acl_block_events_q,
                                     pmu_tx_stream_bytes_in_q,
                                     pmu_tx_stream_bytes_out_q,
-                                    pmu_tx_stream_chunk_count_q
+                                    pmu_tx_stream_chunk_count_q,
+                                    pmu_tx_crypto_clock_gated_cycles_q,
+                                    pmu_tx_crypto_clock_status_flags_q
                                  );
     assign stream_tx_active_w = (stream_tx_kind_q != STREAM_TX_NONE);
     assign stream_tx_data_w   = stream_tx_byte(stream_tx_kind_q, stream_tx_idx_q, stream_tx_seq_q, stream_tx_slot_q, stream_tx_code_q);
@@ -820,12 +864,25 @@ module contest_uart_crypto_probe #(
         bench_prefix_byte(bench_safe_head_prefix_q, bench_bytes_in_q[3:0]) :
         bench_lfsr_q;
     assign bench_source_last_w = (bench_bytes_in_q == (BENCH_TOTAL_BYTES - 32'd1));
-    assign axis_core_in_tvalid_w = bench_source_mode_w ? (bench_bytes_in_q < BENCH_TOTAL_BYTES) : axis_in_pending_valid_q;
+    assign axis_core_in_tvalid_w = crypto_datapath_ready_w && (bench_source_mode_w ? (bench_bytes_in_q < BENCH_TOTAL_BYTES) : axis_in_pending_valid_q);
     assign axis_core_in_tdata_w  = bench_source_mode_w ? bench_source_data_w : axis_in_pending_data_q;
     assign axis_core_in_tlast_w  = bench_source_mode_w ? bench_source_last_w : axis_in_pending_last_q;
     assign axis_core_in_tuser_w  = bench_source_mode_w ? bench_algo_q : axis_in_pending_user_q;
-    assign axis_in_fire_w      = !bench_source_mode_w && axis_in_pending_valid_q && axis_in_tready_w;
-    assign bench_source_fire_w = bench_source_mode_w && (bench_bytes_in_q < BENCH_TOTAL_BYTES) && axis_in_tready_w;
+    assign crypto_idle_sync_w    = crypto_idle_sync2_q;
+    assign crypto_wake_event_w   = crypto_wake_req_q ||
+                                   axis_in_pending_valid_q ||
+                                   acl_in_valid_q ||
+                                   acl_cfg_pending_q ||
+                                   (bench_state_q != BENCH_IDLE) ||
+                                   frame_bench_start_q ||
+                                   frame_bench_force_q ||
+                                   axis_soft_reset_q ||
+                                   fatal_pending_q;
+    assign crypto_clk_ce_w        = !i_rst_n ? 1'b1 : crypto_clk_ce_q;
+    assign crypto_datapath_ready_w = crypto_clk_ce_q && (crypto_wake_settle_count_q == 2'd0);
+    assign pmu_crypto_clock_status_flags_w = {62'd0, 1'b1, crypto_clock_gated_q};
+    assign axis_in_fire_w      = !bench_source_mode_w && axis_in_pending_valid_q && axis_in_tready_w && crypto_datapath_ready_w;
+    assign bench_source_fire_w = bench_source_mode_w && (bench_bytes_in_q < BENCH_TOTAL_BYTES) && axis_in_tready_w && crypto_datapath_ready_w;
     assign stream_payload_active_w =
         (tx_owner_q == TX_OWNER_STREAM) &&
         !stream_tx_active_w &&
@@ -847,14 +904,15 @@ module contest_uart_crypto_probe #(
         !acl_frame_stream_q &&
         (stream_seq_count_q == 4'd0) &&
         (stream_payload_bytes_left_q == 8'd0);
-    assign axis_out_tready_w  = bench_sink_mode_w ? 1'b1 :
+    assign axis_out_tready_w  = !crypto_datapath_ready_w ? 1'b0 :
+                                (bench_sink_mode_w ? 1'b1 :
                                 ((tx_owner_q == TX_OWNER_STREAM) ?
                                     (tx_ready &&
                                      !stream_tx_active_w &&
                                      (stream_payload_bytes_left_q != 8'd0)) :
                                  ((tx_owner_q == TX_OWNER_AXIS) ?
                                     (tx_ready && axis_direct_allowed_w) :
-                                    1'b0));
+                                    1'b0)));
     assign axis_out_fire_w    = axis_out_tvalid_w && axis_out_tready_w;
     assign bench_candidate_hit_w =
         (bench_candidate_prefix(bench_pick_idx_q) == acl_rule_keys_flat[127:0])   ||
@@ -989,10 +1047,16 @@ module contest_uart_crypto_probe #(
         .o_payload_count(parser_payload_count)
     );
 
+    BUFGCE u_bufgce_crypto (
+        .I (i_clk),
+        .CE(crypto_clk_ce_w),
+        .O (clk_crypto_gated)
+    );
+
     contest_crypto_axis_core u_axis_core (
-        .i_clk                 (i_clk),
+        .i_clk                 (clk_crypto_gated),
         .i_rst_n               (i_rst_n),
-        .i_soft_reset          (axis_soft_reset_q),
+        .i_soft_reset          (axis_soft_reset_q && crypto_datapath_ready_w),
         .s_axis_tvalid         (axis_core_in_tvalid_w),
         .s_axis_tready         (axis_in_tready_w),
         .s_axis_tdata          (axis_core_in_tdata_w),
@@ -1013,7 +1077,8 @@ module contest_uart_crypto_probe #(
         .o_acl_block_pulse     (axis_acl_block_pulse_w),
         .o_acl_block_slot_valid(axis_acl_block_slot_valid_w),
         .o_acl_block_slot      (axis_acl_block_slot_w),
-        .o_pmu_crypto_active   (pmu_crypto_active_w)
+        .o_pmu_crypto_active   (pmu_crypto_active_w),
+        .o_clock_idle          (crypto_clock_idle_w)
     );
 
     contest_uart_tx #(
@@ -1027,6 +1092,46 @@ module contest_uart_crypto_probe #(
         .o_ready  (tx_ready),
         .o_uart_tx(o_uart_tx)
     );
+
+    always @(posedge i_clk) begin
+        if (!i_rst_n) begin
+            crypto_clk_ce_q            <= 1'b1;
+            crypto_clock_gated_q       <= 1'b0;
+            crypto_sleep_count_q       <= 5'd0;
+            crypto_wake_settle_count_q <= 2'd0;
+            crypto_idle_sync1_q        <= 1'b0;
+            crypto_idle_sync2_q        <= 1'b0;
+        end else begin
+            crypto_idle_sync1_q <= crypto_clock_idle_w;
+            crypto_idle_sync2_q <= crypto_idle_sync1_q;
+
+            if (crypto_wake_event_w) begin
+                if (!crypto_clk_ce_q) begin
+                    crypto_clk_ce_q            <= 1'b1;
+                    crypto_clock_gated_q       <= 1'b0;
+                    crypto_wake_settle_count_q <= CRYPTO_WAKE_SETTLE_CYCLES;
+                end else if (crypto_wake_settle_count_q != 2'd0) begin
+                    crypto_wake_settle_count_q <= crypto_wake_settle_count_q - 2'd1;
+                end
+                crypto_sleep_count_q <= 5'd0;
+            end else if (crypto_wake_settle_count_q != 2'd0) begin
+                crypto_wake_settle_count_q <= crypto_wake_settle_count_q - 2'd1;
+                crypto_sleep_count_q <= 5'd0;
+            end else if (crypto_clk_ce_q) begin
+                if (crypto_idle_sync_w) begin
+                    if (crypto_sleep_count_q == (CRYPTO_SLEEP_HOLDOFF - 5'd1)) begin
+                        crypto_clk_ce_q      <= 1'b0;
+                        crypto_clock_gated_q <= 1'b1;
+                        crypto_sleep_count_q <= 5'd0;
+                    end else begin
+                        crypto_sleep_count_q <= crypto_sleep_count_q + 5'd1;
+                    end
+                end else begin
+                    crypto_sleep_count_q <= 5'd0;
+                end
+            end
+        end
+    end
 
     always @(posedge i_clk) begin
         if (!i_rst_n) begin
@@ -1075,6 +1180,9 @@ module contest_uart_crypto_probe #(
             frame_cfg_index_q         <= 8'd0;
             frame_cfg_key_q           <= 128'd0;
             frame_cfg_key_seen_q      <= 1'b0;
+            acl_cfg_pending_q         <= 1'b0;
+            acl_cfg_pending_index_q   <= 3'd0;
+            acl_cfg_pending_key_q     <= 128'd0;
             frame_algo_sel_q          <= ALG_SM4;
             frame_stream_cap_q        <= 1'b0;
             frame_stream_start_q      <= 1'b0;
@@ -1146,6 +1254,7 @@ module contest_uart_crypto_probe #(
             pmu_stream_bytes_in_q     <= 64'd0;
             pmu_stream_bytes_out_q    <= 64'd0;
             pmu_stream_chunk_count_q  <= 64'd0;
+            pmu_crypto_clock_gated_cycles_q <= 64'd0;
             pmu_snap_global_cycles_q  <= 64'd0;
             pmu_snap_crypto_active_cycles_q <= 64'd0;
             pmu_snap_uart_tx_stall_cycles_q <= 64'd0;
@@ -1154,6 +1263,8 @@ module contest_uart_crypto_probe #(
             pmu_snap_stream_bytes_in_q  <= 64'd0;
             pmu_snap_stream_bytes_out_q <= 64'd0;
             pmu_snap_stream_chunk_count_q <= 64'd0;
+            pmu_snap_crypto_clock_gated_cycles_q <= 64'd0;
+            pmu_snap_crypto_clock_status_flags_q <= 64'd0;
             pmu_pending_q             <= 1'b0;
             pmu_pending_kind_q        <= PMU_TX_NONE;
             pmu_tx_kind_q             <= PMU_TX_NONE;
@@ -1166,6 +1277,8 @@ module contest_uart_crypto_probe #(
             pmu_tx_stream_bytes_in_q  <= 64'd0;
             pmu_tx_stream_bytes_out_q <= 64'd0;
             pmu_tx_stream_chunk_count_q <= 64'd0;
+            pmu_tx_crypto_clock_gated_cycles_q <= 64'd0;
+            pmu_tx_crypto_clock_status_flags_q <= 64'd0;
             bench_state_q             <= BENCH_IDLE;
             bench_tx_idx_q            <= 5'd0;
             bench_pick_idx_q          <= 4'd0;
@@ -1221,6 +1334,7 @@ module contest_uart_crypto_probe #(
             crypto_wdg_counter_q      <= 32'd0;
             fatal_tx_active_q         <= 1'b0;
             fatal_tx_idx_q            <= 2'd0;
+            crypto_wake_req_q         <= 1'b0;
             crc_pipe_data_q           <= 8'd0;
         end else begin
             acl_in_valid_q    <= 1'b0;
@@ -1276,6 +1390,17 @@ module contest_uart_crypto_probe #(
             acl_cfg_key_q     <= 128'd0;
             axis_in_pending_clear_q <= 1'b0;
 
+            if (crypto_wake_req_q && crypto_datapath_ready_w) begin
+                crypto_wake_req_q <= 1'b0;
+            end
+
+            if (acl_cfg_pending_q && crypto_datapath_ready_w && !acl_cfg_busy) begin
+                acl_cfg_valid_q       <= 1'b1;
+                acl_cfg_index_q       <= acl_cfg_pending_index_q;
+                acl_cfg_key_q         <= acl_cfg_pending_key_q;
+                acl_cfg_pending_q     <= 1'b0;
+            end
+
             if (pmu_count_enable_w) begin
                 pmu_global_cycles_q <= pmu_global_cycles_q + 64'd1;
                 if (pmu_crypto_active_w) begin
@@ -1286,6 +1411,9 @@ module contest_uart_crypto_probe #(
                 end
                 if (pmu_stream_credit_block_w) begin
                     pmu_stream_credit_block_cycles_q <= pmu_stream_credit_block_cycles_q + 64'd1;
+                end
+                if (crypto_clock_gated_q) begin
+                    pmu_crypto_clock_gated_cycles_q <= pmu_crypto_clock_gated_cycles_q + 64'd1;
                 end
             end
 
@@ -1415,6 +1543,8 @@ module contest_uart_crypto_probe #(
                     pmu_tx_stream_bytes_in_q <= pmu_snap_stream_bytes_in_q;
                     pmu_tx_stream_bytes_out_q <= pmu_snap_stream_bytes_out_q;
                     pmu_tx_stream_chunk_count_q <= pmu_snap_stream_chunk_count_q;
+                    pmu_tx_crypto_clock_gated_cycles_q <= pmu_snap_crypto_clock_gated_cycles_q;
+                    pmu_tx_crypto_clock_status_flags_q <= pmu_snap_crypto_clock_status_flags_q;
                     tx_owner_q         <= TX_OWNER_PMU;
                 end else if (!stream_tx_active_w &&
                              (stream_payload_bytes_left_q == 8'd0) &&
@@ -1653,6 +1783,7 @@ module contest_uart_crypto_probe #(
                         frame_stream_cap_q <= 1'b1;
                     end else if ((parser_payload_len == 8'd18) && (parser_payload_byte == ASCII_CFG_ACK)) begin
                         frame_cfg_q <= 1'b1;
+                        crypto_wake_req_q <= 1'b1;
                     end else if ((parser_payload_len == 8'd4) && (parser_payload_byte == STREAM_START_OP)) begin
                         frame_stream_start_q <= 1'b1;
                     end else if ((parser_payload_len == 8'h81) &&
@@ -1794,6 +1925,8 @@ module contest_uart_crypto_probe #(
                     pmu_snap_stream_bytes_in_q           <= pmu_stream_bytes_in_q;
                     pmu_snap_stream_bytes_out_q          <= pmu_stream_bytes_out_q;
                     pmu_snap_stream_chunk_count_q        <= pmu_stream_chunk_count_q;
+                    pmu_snap_crypto_clock_gated_cycles_q <= pmu_crypto_clock_gated_cycles_q;
+                    pmu_snap_crypto_clock_status_flags_q <= pmu_crypto_clock_status_flags_w;
                     pmu_pending_q                        <= 1'b1;
                     pmu_pending_kind_q                   <= PMU_TX_SNAPSHOT;
                 end else if (((parser_payload_valid && (parser_payload_count == 8'd1) &&
@@ -1808,6 +1941,7 @@ module contest_uart_crypto_probe #(
                     pmu_stream_bytes_in_q               <= 64'd0;
                     pmu_stream_bytes_out_q              <= 64'd0;
                     pmu_stream_chunk_count_q            <= 64'd0;
+                    pmu_crypto_clock_gated_cycles_q     <= 64'd0;
                     pmu_snap_global_cycles_q            <= 64'd0;
                     pmu_snap_crypto_active_cycles_q     <= 64'd0;
                     pmu_snap_uart_tx_stall_cycles_q     <= 64'd0;
@@ -1816,6 +1950,8 @@ module contest_uart_crypto_probe #(
                     pmu_snap_stream_bytes_in_q          <= 64'd0;
                     pmu_snap_stream_bytes_out_q         <= 64'd0;
                     pmu_snap_stream_chunk_count_q       <= 64'd0;
+                    pmu_snap_crypto_clock_gated_cycles_q <= 64'd0;
+                    pmu_snap_crypto_clock_status_flags_q <= 64'd0;
                     pmu_pending_q                       <= 1'b1;
                     pmu_pending_kind_q                  <= PMU_TX_CLEAR_ACK;
                 end else if (((parser_payload_valid && (parser_payload_count == 8'd1) &&
@@ -2031,13 +2167,14 @@ module contest_uart_crypto_probe #(
                         pending_error_q     <= 1'b1;
                         stat_error_frames_q <= stat_error_frames_q + 8'd1;
                     end else begin
-                        acl_cfg_valid_q       <= 1'b1;
-                        acl_cfg_index_q       <= frame_cfg_index_q[2:0];
-                        acl_cfg_key_q         <= ((parser_payload_valid && (parser_payload_count == 8'd18)) ?
-                                                  {frame_cfg_key_q[119:0], parser_payload_byte} : frame_cfg_key_q);
-                        pending_cfg_ack_idx_q <= frame_cfg_index_q[2:0];
-                        pending_cfg_ack_key_q <= ((parser_payload_valid && (parser_payload_count == 8'd18)) ?
-                                                  {frame_cfg_key_q[119:0], parser_payload_byte} : frame_cfg_key_q);
+                        acl_cfg_pending_q       <= 1'b1;
+                        acl_cfg_pending_index_q <= frame_cfg_index_q[2:0];
+                        acl_cfg_pending_key_q   <= ((parser_payload_valid && (parser_payload_count == 8'd18)) ?
+                                                     {frame_cfg_key_q[119:0], parser_payload_byte} : frame_cfg_key_q);
+                        pending_cfg_ack_idx_q   <= frame_cfg_index_q[2:0];
+                        pending_cfg_ack_key_q   <= ((parser_payload_valid && (parser_payload_count == 8'd18)) ?
+                                                     {frame_cfg_key_q[119:0], parser_payload_byte} : frame_cfg_key_q);
+                        crypto_wake_req_q       <= 1'b1;
                     end
                 end else if (frame_proto_error_q) begin
                     pending_error_q     <= 1'b1;

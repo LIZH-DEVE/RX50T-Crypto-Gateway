@@ -27,7 +27,8 @@ module contest_crypto_axis_core (
     output wire       o_acl_block_pulse,
     output wire       o_acl_block_slot_valid,
     output wire [2:0] o_acl_block_slot,
-    output wire       o_pmu_crypto_active
+    output wire       o_pmu_crypto_active,
+    output wire       o_clock_idle
 );
 
     wire       acl_axis_tvalid;
@@ -47,6 +48,11 @@ module contest_crypto_axis_core (
     wire [127:0] blk_out_tdata;
     wire         blk_out_tlast;
     wire [5:0]   blk_out_tuser;
+    wire         acl_idle_w;
+    wire         packer_idle_w;
+    wire         block_engine_idle_w;
+    wire         unpacker_idle_w;
+    reg          clock_idle_q;
 
     contest_acl_axis_core u_acl_axis (
         .i_clk                 (i_clk),
@@ -72,7 +78,8 @@ module contest_crypto_axis_core (
         .o_acl_block_slot_valid(o_acl_block_slot_valid),
         .o_acl_block_slot      (o_acl_block_slot),
         .o_rule_keys_flat      (o_rule_keys_flat),
-        .o_rule_counts_flat    (o_rule_counts_flat)
+        .o_rule_counts_flat    (o_rule_counts_flat),
+        .o_idle                (acl_idle_w)
     );
 
     contest_axis_block_packer u_packer (
@@ -88,7 +95,8 @@ module contest_crypto_axis_core (
         .m_axis_tready(blk_in_tready),
         .m_axis_tdata (blk_in_tdata),
         .m_axis_tlast (blk_in_tlast),
-        .m_axis_tuser (blk_in_tuser)
+        .m_axis_tuser (blk_in_tuser),
+        .o_idle       (packer_idle_w)
     );
 
     contest_crypto_block_engine u_block_engine (
@@ -101,11 +109,12 @@ module contest_crypto_axis_core (
         .s_axis_tlast      (blk_in_tlast),
         .s_axis_tuser      (blk_in_tuser),
         .m_axis_tvalid     (blk_out_tvalid),
-        .m_axis_tready     (blk_out_tready),
-        .m_axis_tdata      (blk_out_tdata),
-        .m_axis_tlast      (blk_out_tlast),
-        .m_axis_tuser      (blk_out_tuser),
-        .o_pmu_crypto_active(o_pmu_crypto_active)
+        .m_axis_tready      (blk_out_tready),
+        .m_axis_tdata       (blk_out_tdata),
+        .m_axis_tlast       (blk_out_tlast),
+        .m_axis_tuser       (blk_out_tuser),
+        .o_pmu_crypto_active(o_pmu_crypto_active),
+        .o_idle             (block_engine_idle_w)
     );
 
     contest_axis_block_unpacker u_unpacker (
@@ -120,7 +129,23 @@ module contest_crypto_axis_core (
         .m_axis_tvalid(m_axis_tvalid),
         .m_axis_tready(m_axis_tready),
         .m_axis_tdata (m_axis_tdata),
-        .m_axis_tlast (m_axis_tlast)
+        .m_axis_tlast (m_axis_tlast),
+        .o_idle       (unpacker_idle_w)
     );
+
+    assign o_clock_idle = clock_idle_q;
+
+    always @(posedge i_clk) begin
+        if (!i_rst_n) begin
+            clock_idle_q <= 1'b0;
+        end else if (i_soft_reset) begin
+            clock_idle_q <= 1'b0;
+        end else begin
+            clock_idle_q <= acl_idle_w &&
+                            packer_idle_w &&
+                            block_engine_idle_w &&
+                            unpacker_idle_w;
+        end
+    end
 
 endmodule

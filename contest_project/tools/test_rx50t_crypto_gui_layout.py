@@ -117,6 +117,38 @@ class CryptoGatewayGuiLayoutTests(unittest.TestCase):
         finally:
             app.destroy()
 
+    def test_pmu_v3_updates_clock_status_panel(self) -> None:
+        app = gui.CryptoGatewayApp()
+        try:
+            app._handle_event(
+                gui.WorkerEvent(
+                    kind="pmu_snapshot",
+                    payload={
+                        "rx": bytes.fromhex("55 56 50 03"),
+                        "duration_s": 0.001,
+                        "passed": True,
+                        "clk_hz": 50_000_000,
+                        "global_cycles": 1000,
+                        "crypto_active_cycles": 250,
+                        "uart_tx_stall_cycles": 500,
+                        "stream_credit_block_cycles": 125,
+                        "acl_block_events": 2,
+                        "stream_bytes_in": 512,
+                        "stream_bytes_out": 512,
+                        "stream_chunk_count": 4,
+                        "crypto_clock_gated_cycles": 64,
+                        "crypto_clock_status_flags": 0x3,
+                        "crypto_utilization": 0.25,
+                        "uart_stall_ratio": 0.5,
+                        "credit_block_ratio": 0.125,
+                    },
+                )
+            )
+            self.assertEqual(app.pmu_vars["clock_status"].get(), "GATED")
+            self.assertEqual(app.evidence_live_vars["clock_status"].get(), "GATED")
+        finally:
+            app.destroy()
+
     def test_benchmark_panel_exists_and_bench_event_does_not_touch_uart_throughput(self) -> None:
         app = gui.CryptoGatewayApp()
         try:

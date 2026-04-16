@@ -72,6 +72,7 @@ class CryptoGatewayApp(tk.Tk):
             "stream_bytes_in": tk.StringVar(value="0"),
             "stream_bytes_out": tk.StringVar(value="0"),
             "stream_chunks": tk.StringVar(value="0"),
+            "clock_status": tk.StringVar(value="ACTIVE"),
         }
         self.bench_vars = {
             "status": tk.StringVar(value="-"),
@@ -99,6 +100,7 @@ class CryptoGatewayApp(tk.Tk):
             "stream_in": tk.StringVar(value="-"),
             "stream_out": tk.StringVar(value="-"),
             "stream_chunks": tk.StringVar(value="-"),
+            "clock_status": tk.StringVar(value="ACTIVE"),
         }
         self.evidence_frozen_vars = {
             "wire_mbps": tk.StringVar(value="- Mbps"),
@@ -109,6 +111,7 @@ class CryptoGatewayApp(tk.Tk):
             "credit_block": tk.StringVar(value="-"),
             "stream_in": tk.StringVar(value="-"),
             "stream_out": tk.StringVar(value="-"),
+            "clock_status": tk.StringVar(value="-"),
             "stream_chunks": tk.StringVar(value="-"),
         }
         self.evidence_frozen_active = False
@@ -618,6 +621,7 @@ class CryptoGatewayApp(tk.Tk):
                 ("UART Stall", "uart_stall", "#f59e0b"),
                 ("Credit Block", "credit_block", "#fda4af"),
                 ("ACL Events", "acl_events", "#86efac"),
+                ("Clock", "clock_status", "#fbbf24"),
             ]
         ):
             tk.Label(
@@ -1046,6 +1050,7 @@ class CryptoGatewayApp(tk.Tk):
         self.pmu_vars["stream_bytes_in"].set("0")
         self.pmu_vars["stream_bytes_out"].set("0")
         self.pmu_vars["stream_chunks"].set("0")
+        self.pmu_vars["clock_status"].set("ACTIVE")
 
     def _reset_frozen_evidence(self) -> None:
         self.evidence_frozen_vars["wire_mbps"].set("- Mbps")
@@ -1057,6 +1062,7 @@ class CryptoGatewayApp(tk.Tk):
         self.evidence_frozen_vars["stream_in"].set("-")
         self.evidence_frozen_vars["stream_out"].set("-")
         self.evidence_frozen_vars["stream_chunks"].set("-")
+        self.evidence_frozen_vars["clock_status"].set("-")
         self.evidence_frozen_active = False
 
     def _apply_pmu_snapshot(self, payload: dict) -> None:
@@ -1067,6 +1073,7 @@ class CryptoGatewayApp(tk.Tk):
         self.pmu_vars["stream_bytes_in"].set(str(int(payload.get("stream_bytes_in", 0))))
         self.pmu_vars["stream_bytes_out"].set(str(int(payload.get("stream_bytes_out", 0))))
         self.pmu_vars["stream_chunks"].set(str(int(payload.get("stream_chunk_count", 0))))
+        self.pmu_vars["clock_status"].set("GATED" if (int(payload.get("crypto_clock_status_flags", 0)) & 0x1) else "ACTIVE")
 
     def _freeze_evidence_snapshot(self, wire_mbps: float, total_bytes: int, chunk_count: int) -> None:
         self.evidence_frozen_vars["wire_mbps"].set(f"{wire_mbps:.3f} Mbps")
@@ -1078,6 +1085,7 @@ class CryptoGatewayApp(tk.Tk):
         self.evidence_frozen_vars["stream_in"].set(self.evidence_live_vars["stream_in"].get())
         self.evidence_frozen_vars["stream_out"].set(self.evidence_live_vars["stream_out"].get())
         self.evidence_frozen_vars["stream_chunks"].set(str(chunk_count))
+        self.evidence_frozen_vars["clock_status"].set(self.evidence_live_vars["clock_status"].get())
         self.evidence_frozen_active = True
 
     def _update_live_evidence(self, payload: dict) -> None:
@@ -1089,6 +1097,7 @@ class CryptoGatewayApp(tk.Tk):
         self.evidence_live_vars["hw_util"].set(f"{hw_util * 100.0:.2f}%")
         self.evidence_live_vars["uart_stall"].set(f"{float(payload.get('uart_stall_ratio', 0.0)) * 100.0:.2f}%")
         self.evidence_live_vars["credit_block"].set(f"{float(payload.get('credit_block_ratio', 0.0)) * 100.0:.2f}%")
+        self.evidence_live_vars["clock_status"].set("GATED" if (int(payload.get("crypto_clock_status_flags", 0)) & 0x1) else "ACTIVE")
         self.evidence_live_vars["stream_in"].set(self._format_bytes(stream_in))
         self.evidence_live_vars["stream_out"].set(self._format_bytes(stream_out))
         self.evidence_live_vars["stream_chunks"].set(str(int(payload.get("stream_chunk_count", 0))))
@@ -1147,6 +1156,7 @@ class CryptoGatewayApp(tk.Tk):
         self.evidence_live_vars["hw_util"].set(f"{float(payload['crypto_utilization']) * 100.0:.2f}%")
         self.evidence_live_vars["uart_stall"].set(f"{float(payload['uart_stall_ratio']) * 100.0:.2f}%")
         self.evidence_live_vars["credit_block"].set(f"{float(payload['credit_block_ratio']) * 100.0:.2f}%")
+        self.evidence_live_vars["clock_status"].set("GATED" if (int(payload.get("crypto_clock_status_flags", 0)) & 0x1) else "ACTIVE")
         self.evidence_live_vars["stream_in"].set(str(int(payload.get("stream_bytes_in", 0))))
         self.evidence_live_vars["stream_out"].set(str(int(payload.get("stream_bytes_out", 0))))
         self.evidence_live_vars["stream_chunks"].set(str(int(payload.get("stream_chunk_count", 0))))
@@ -1176,6 +1186,9 @@ class CryptoGatewayApp(tk.Tk):
         sc_live = self.evidence_live_vars["stream_chunks"].get()
         if sc_live not in ("-", "", "0"):
             self.evidence_frozen_vars["stream_chunks"].set(sc_live)
+        clock_live = self.evidence_live_vars["clock_status"].get()
+        if clock_live not in ("-", ""):
+            self.evidence_frozen_vars["clock_status"].set(clock_live)
 
     def _draw_chart(self) -> None:
         self.chart.delete("all")
