@@ -165,6 +165,8 @@ class PmuSnapshot:
     stream_bytes_in: int | None = None
     stream_bytes_out: int | None = None
     stream_chunk_count: int | None = None
+    crypto_clock_gated_cycles: int | None = None
+    crypto_clock_status_flags: int | None = None
 
     def as_bytes(self) -> bytes:
         payload = bytearray([0x50, self.version])
@@ -178,7 +180,18 @@ class PmuSnapshot:
             payload.extend((self.stream_bytes_in or 0).to_bytes(8, "big"))
             payload.extend((self.stream_bytes_out or 0).to_bytes(8, "big"))
             payload.extend((self.stream_chunk_count or 0).to_bytes(8, "big"))
+        if self.version >= 3:
+            payload.extend((self.crypto_clock_gated_cycles or 0).to_bytes(8, "big"))
+            payload.extend((self.crypto_clock_status_flags or 0).to_bytes(8, "big"))
         return bytes([0x55, len(payload)]) + bytes(payload)
+
+    @property
+    def clock_is_gated(self) -> bool:
+        return bool((self.crypto_clock_status_flags or 0) & 0x1)
+
+    @property
+    def clock_gating_enabled(self) -> bool:
+        return bool((self.crypto_clock_status_flags or 0) & 0x2)
 
     @property
     def crypto_utilization(self) -> float:
@@ -498,6 +511,23 @@ def parse_pmu_snapshot_response(raw: bytes) -> PmuSnapshot:
             stream_bytes_out=int.from_bytes(raw[56:64], "big"),
             stream_chunk_count=int.from_bytes(raw[64:72], "big"),
             version=2,
+        )
+    if version == 0x03:
+        if len(raw) != 88 or raw[1] != 0x56:
+            raise ValueError(f"invalid PMU v3 snapshot response: {format_hex(raw)}")
+        return PmuSnapshot(
+            clk_hz=int.from_bytes(raw[4:8], "big"),
+            global_cycles=int.from_bytes(raw[8:16], "big"),
+            crypto_active_cycles=int.from_bytes(raw[16:24], "big"),
+            uart_tx_stall_cycles=int.from_bytes(raw[24:32], "big"),
+            stream_credit_block_cycles=int.from_bytes(raw[32:40], "big"),
+            acl_block_events=int.from_bytes(raw[40:48], "big"),
+            stream_bytes_in=int.from_bytes(raw[48:56], "big"),
+            stream_bytes_out=int.from_bytes(raw[56:64], "big"),
+            stream_chunk_count=int.from_bytes(raw[64:72], "big"),
+            crypto_clock_gated_cycles=int.from_bytes(raw[72:80], "big"),
+            crypto_clock_status_flags=int.from_bytes(raw[80:88], "big"),
+            version=3,
         )
     raise ValueError(f"unsupported PMU schema version 0x{version:02X}: {format_hex(raw)}")
 

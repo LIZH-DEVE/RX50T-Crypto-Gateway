@@ -15,7 +15,8 @@ module contest_axis_block_packer (
     input  wire         m_axis_tready,
     output reg  [127:0] m_axis_tdata,
     output reg          m_axis_tlast,
-    output reg  [5:0]   m_axis_tuser
+    output reg  [5:0]   m_axis_tuser,
+    output wire         o_idle
 );
 
     reg [127:0] gather_shift_q;
@@ -35,6 +36,7 @@ module contest_axis_block_packer (
     endfunction
 
     assign s_axis_tready = !m_axis_tvalid;
+    assign o_idle = !m_axis_tvalid && (gather_count_q == 5'd0);
 
     always @(posedge i_clk) begin
         if (!i_rst_n) begin

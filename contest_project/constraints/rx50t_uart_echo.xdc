@@ -1,4 +1,8 @@
 create_clock -period 20.000 [get_ports i_clk]
+create_generated_clock -name clk_crypto_gated \
+    -source [get_pins u_top/u_probe/u_bufgce_crypto/I] \
+    -divide_by 1 \
+    [get_pins u_top/u_probe/u_bufgce_crypto/O]
 set_property IOSTANDARD LVCMOS33 [get_ports i_clk]
 set_property PACKAGE_PIN Y18 [get_ports i_clk]
 

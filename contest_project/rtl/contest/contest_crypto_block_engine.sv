@@ -17,7 +17,8 @@ module contest_crypto_block_engine (
     output reg          m_axis_tlast,
     output reg  [5:0]   m_axis_tuser,
 
-    output wire         o_pmu_crypto_active
+    output wire         o_pmu_crypto_active,
+    output wire         o_idle
 );
 
     localparam [127:0] TEST_SM4_KEY = 128'h0123456789ABCDEFFEDCBA9876543210;
@@ -86,6 +87,21 @@ module contest_crypto_block_engine (
         sm4_start_seen_q &&
         (sm4_valid_burst_q != 3'd0);
     assign o_pmu_crypto_active = worker_busy_q && !worker_bypass_q;
+    assign o_idle =
+        sm4_key_sent_q &&
+        !worker_busy_q &&
+        !ingress_fetch_pending_q &&
+        !egress_fetch_pending_q &&
+        ingress_empty_w &&
+        egress_empty_w &&
+        !m_axis_tvalid &&
+        !sm4_start_seen_q &&
+        !sm4_wait_done_clear_q &&
+        (sm4_valid_burst_q == 3'd0) &&
+        (aes_state_q == AES_IDLE) &&
+        !ingress_rd_en_q &&
+        !egress_wr_en_q &&
+        !egress_rd_en_q;
 
     contest_block_fifo #(
         .WIDTH (135),

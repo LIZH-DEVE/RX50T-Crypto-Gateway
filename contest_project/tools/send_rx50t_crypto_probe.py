@@ -37,6 +37,7 @@ from crypto_gateway_protocol import (
 
 
 def _print_pmu_snapshot(snapshot: PmuSnapshot) -> None:
+    clock_status = "GATED" if snapshot.clock_is_gated else "ACTIVE"
     print(
         "[PMU] "
         f"clk_hz={snapshot.clk_hz} "
@@ -47,7 +48,10 @@ def _print_pmu_snapshot(snapshot: PmuSnapshot) -> None:
         f"acl_block_events={snapshot.acl_block_events} "
         f"stream_bytes_in={snapshot.stream_bytes_in} "
         f"stream_bytes_out={snapshot.stream_bytes_out} "
-        f"stream_chunks={snapshot.stream_chunk_count}"
+        f"stream_chunks={snapshot.stream_chunk_count} "
+        f"gated_cycles={snapshot.crypto_clock_gated_cycles} "
+        f"clock_flags=0x{snapshot.crypto_clock_status_flags:016X} "
+        f"clock_status={clock_status}"
     )
 
 
@@ -278,7 +282,7 @@ def main() -> int:
     elif args.query_rule_stats and case.expected is None:
         print("[EXPECT] rule stats response with 8 counters")
     elif args.query_pmu and case.expected is None:
-        print("[EXPECT] PMU snapshot response with 5 counters + clk_hz")
+        print("[EXPECT] PMU snapshot response (schema v1/v2/v3)")
     elif args.clear_pmu and case.expected is None:
         print("[EXPECT] PMU clear ACK 55 02 4A 00")
     elif (args.run_onchip_bench or args.force_run_onchip_bench or args.query_bench) and case.expected is None:

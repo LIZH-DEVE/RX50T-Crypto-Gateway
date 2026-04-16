@@ -29,7 +29,8 @@ module contest_acl_axis_core (
     output reg  [2:0]   o_acl_block_slot,
 
     output wire [1023:0] o_rule_keys_flat,
-    output wire [255:0]  o_rule_counts_flat
+    output wire [255:0]  o_rule_counts_flat,
+    output wire          o_idle
 );
 
     localparam [2:0] ST_IDLE        = 3'd0;
@@ -134,6 +135,10 @@ module contest_acl_axis_core (
         slot_count_q[7], slot_count_q[6], slot_count_q[5], slot_count_q[4],
         slot_count_q[3], slot_count_q[2], slot_count_q[1], slot_count_q[0]
     };
+    assign o_idle = (cfg_state_q == CFG_IDLE) &&
+                    (state_q == ST_IDLE) &&
+                    (buffer_count_q == 5'd0) &&
+                    !m_axis_tvalid;
 
     assign s_axis_tready =
         (cfg_state_q == CFG_IDLE) &&
