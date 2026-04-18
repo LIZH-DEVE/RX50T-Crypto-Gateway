@@ -6,6 +6,8 @@ module tb_contest_crypto_cdc_ingress_bridge;
     localparam integer RD_PERIOD_NS = 20;
     localparam integer ROOT_PERIOD_NS = 20;
     localparam integer FRAME_BYTES = 24;
+    localparam integer NASTY_BYTES = 32;
+    localparam integer TAIL_STALL_CYCLES = 6;
 
     reg wr_clk;
     reg root_clk;
@@ -33,6 +35,14 @@ module tb_contest_crypto_cdc_ingress_bridge;
     integer   idx;
     integer   out_idx;
     integer   wake_pulse_count;
+    integer   nasty_out_idx;
+    integer   nasty_last_count;
+    integer   stall_cycles_left;
+    reg       nasty_mode;
+    reg       tail_stall_started;
+    reg       prev_stall_valid_q;
+    reg [7:0] prev_stall_data_q;
+    reg       prev_stall_last_q;
 
     assign crypto_clk = crypto_clk_en ? root_clk : 1'b0;
 
@@ -86,6 +96,40 @@ module tb_contest_crypto_cdc_ingress_bridge;
         end
     end
 
+    always @(negedge root_clk) begin
+        if (!rst_n_async || !crypto_clk_en || !nasty_mode) begin
+            m_axis_tready <= 1'b1;
+            stall_cycles_left = 0;
+            tail_stall_started <= 1'b0;
+        end else if ((stall_cycles_left == 0) && !tail_stall_started && m_axis_tvalid && (nasty_out_idx >= NASTY_BYTES - 2)) begin
+            m_axis_tready <= 1'b0;
+            stall_cycles_left = TAIL_STALL_CYCLES - 1;
+            tail_stall_started <= 1'b1;
+        end else if (stall_cycles_left > 0) begin
+            m_axis_tready <= 1'b0;
+            stall_cycles_left = stall_cycles_left - 1;
+        end else begin
+            m_axis_tready <= 1'b1;
+        end
+    end
+
+    always @(posedge crypto_clk) begin
+        if (prev_stall_valid_q && m_axis_tvalid) begin
+            if (m_axis_tdata !== prev_stall_data_q) begin
+                $fatal(1, "bridge nasty stall changed data during backpressure hold");
+            end
+            if (m_axis_tlast !== prev_stall_last_q) begin
+                $fatal(1, "bridge nasty stall changed TLAST during backpressure hold");
+            end
+        end
+
+        prev_stall_valid_q <= nasty_mode && m_axis_tvalid && !m_axis_tready;
+        if (nasty_mode && m_axis_tvalid && !m_axis_tready) begin
+            prev_stall_data_q <= m_axis_tdata;
+            prev_stall_last_q <= m_axis_tlast;
+        end
+    end
+
     task automatic drive_word(input [7:0] data_value, input last_value, input [0:0] user_value);
         begin
             @(negedge wr_clk);
@@ -115,6 +159,14 @@ module tb_contest_crypto_cdc_ingress_bridge;
         m_axis_tready = 1'b1;
         out_idx = 0;
         wake_pulse_count = 0;
+        nasty_out_idx = 0;
+        nasty_last_count = 0;
+        stall_cycles_left = 0;
+        nasty_mode = 1'b0;
+        tail_stall_started = 1'b0;
+        prev_stall_valid_q = 1'b0;
+        prev_stall_data_q = 8'd0;
+        prev_stall_last_q = 1'b0;
 
         repeat (5) @(posedge wr_clk);
         rst_n_async = 1'b1;
@@ -153,6 +205,48 @@ module tb_contest_crypto_cdc_ingress_bridge;
                 out_idx = out_idx + 1;
             end
         end
+
+        nasty_mode = 1'b1;
+        nasty_out_idx = 0;
+        nasty_last_count = 0;
+        tail_stall_started = 1'b0;
+        stall_cycles_left = 0;
+        prev_stall_valid_q = 1'b0;
+        m_axis_tready = 1'b1;
+        fork
+            begin
+                for (idx = 0; idx < NASTY_BYTES; idx = idx + 1) begin
+                    drive_word(8'h40 + idx[7:0], (idx == NASTY_BYTES - 1), 1'b1);
+                end
+            end
+            begin
+                while (nasty_out_idx < NASTY_BYTES) begin
+                    @(posedge crypto_clk);
+                    if (m_axis_tvalid && m_axis_tready) begin
+                        if (m_axis_tdata !== (8'h40 + nasty_out_idx[7:0])) begin
+                            $fatal(1, "bridge nasty stall data mismatch at index %0d expected=0x%02x got=0x%02x", nasty_out_idx, (8'h40 + nasty_out_idx[7:0]), m_axis_tdata);
+                        end
+                        if (m_axis_tuser !== 1'b1) begin
+                            $fatal(1, "bridge nasty stall tuser mismatch at index %0d", nasty_out_idx);
+                        end
+                        if (m_axis_tlast) begin
+                            nasty_last_count = nasty_last_count + 1;
+                            if (nasty_out_idx != NASTY_BYTES - 1) begin
+                                $fatal(1, "bridge nasty stall observed TLAST on beat %0d, expected %0d", nasty_out_idx + 1, NASTY_BYTES);
+                            end
+                        end else if (nasty_out_idx == NASTY_BYTES - 1) begin
+                            $fatal(1, "bridge nasty stall missing TLAST on final beat");
+                        end
+                        nasty_out_idx = nasty_out_idx + 1;
+                    end
+                end
+            end
+        join
+        if (nasty_last_count != 1) begin
+            $fatal(1, "bridge nasty stall expected one TLAST, got %0d", nasty_last_count);
+        end
+        nasty_mode = 1'b0;
+        m_axis_tready = 1'b1;
 
         crypto_clk_en = 1'b0;
         out_idx = 0;

@@ -37,6 +37,7 @@ module contest_cdc_payload_dispatcher (
     wire [7:0] action_payload_len_w;
     wire action_fire_w;
     wire payload_fire_w;
+    wire stream_mode_w;
     wire final_payload_fire_w;
 
     reg [1:0] state_q;
@@ -52,13 +53,14 @@ module contest_cdc_payload_dispatcher (
 
     assign m_axis_tvalid        = crypto_rst_n_sync && crypto_port_active_q && (state_q == ST_ACCEPT) && s_axis_tvalid;
     assign m_axis_tdata         = s_axis_tdata;
-    assign m_axis_tlast         = (bytes_left_q == 8'd1);
+    assign stream_mode_w        = (bytes_left_q == 8'd0);
+    assign m_axis_tlast         = s_axis_tlast || (!stream_mode_w && (bytes_left_q == 8'd1));
     assign m_axis_tuser         = s_axis_tuser;
 
     assign s_axis_tready        = crypto_port_active_q && (((state_q == ST_ACCEPT) && m_axis_tready) ||
                                   (state_q == ST_DRAIN));
     assign payload_fire_w       = s_axis_tvalid && s_axis_tready;
-    assign final_payload_fire_w = payload_fire_w && (bytes_left_q == 8'd1);
+    assign final_payload_fire_w = payload_fire_w && (s_axis_tlast || (!stream_mode_w && (bytes_left_q == 8'd1)));
     assign o_accept_done_pulse  = accept_done_q;
     assign o_busy               = crypto_port_active_q && (state_q != ST_IDLE);
 
@@ -89,7 +91,7 @@ module contest_cdc_payload_dispatcher (
                     end
                 endcase
             end else if (payload_fire_w) begin
-                if (bytes_left_q != 8'd0) begin
+                if (!stream_mode_w && (bytes_left_q != 8'd0)) begin
                     bytes_left_q <= bytes_left_q - 8'd1;
                 end
                 if (final_payload_fire_w) begin
