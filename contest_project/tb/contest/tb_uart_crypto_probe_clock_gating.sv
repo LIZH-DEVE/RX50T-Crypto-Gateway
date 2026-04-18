@@ -80,6 +80,23 @@ module tb_uart_crypto_probe_clock_gating;
                 $fatal(1, "UART stop bit invalid");
             end
             if (sample !== expected) begin
+                $display("diag: tx_owner=%0d ctrl_kind=%0d pending_error=%0b pending_cfg_ack=%0b acl_cfg_pending=%0b acl_cfg_done=%0b acl_cfg_error=%0b wake_req=%0b ce=%0b datapath_ready=%0b cfg_state=%0d frontend_key_hi=0x%02x ingress_key_hi=0x%02x pending_key_hi=0x%02x acl_pending_key_hi=0x%02x ctrl_key_hi=0x%02x",
+                         dut.u_probe.tx_owner_q,
+                         dut.u_probe.ctrl_tx_kind_q,
+                         dut.u_probe.pending_error_q,
+                         dut.u_probe.pending_cfg_ack_q,
+                         dut.u_probe.acl_cfg_pending_q,
+                         dut.u_probe.acl_cfg_done,
+                         dut.u_probe.acl_cfg_error,
+                         dut.u_probe.crypto_wake_req_q,
+                         dut.u_probe.crypto_clk_ce_q,
+                         dut.u_probe.crypto_datapath_ready_w,
+                         dut.u_probe.u_axis_core.u_acl_axis.cfg_state_q,
+                         dut.u_probe.u_ingress_frontend.frame_cfg_key_q[127:120],
+                         dut.u_probe.ingress_meta_w.cfg_key[127:120],
+                         dut.u_probe.pending_cfg_ack_key_q[127:120],
+                         dut.u_probe.acl_cfg_pending_key_q[127:120],
+                         dut.u_probe.ctrl_tx_cfg_ack_key_q[127:120]);
                 $fatal(1, "UART output mismatch. expected=0x%02x actual=0x%02x", expected, sample);
             end
         end
@@ -138,6 +155,20 @@ module tb_uart_crypto_probe_clock_gating;
                     wake_wait = wake_wait + 1;
                 end
                 if (dut.u_probe.crypto_clk_ce_q !== 1'b1) begin
+                    $display("wake diag: ce=%0b wake_event=%0b wake_req=%0b acl_cfg_pending=%0b ingress_meta_valid=%0b ingress_meta_kind=%0d frontend_meta_valid=%0b frontend_meta_ready=%0b frontend_meta_kind=%0d frontend_state=%0d locked=%0b rst_async=%0b datapath_ready=%0b",
+                             dut.u_probe.crypto_clk_ce_q,
+                             dut.u_probe.crypto_wake_event_w,
+                             dut.u_probe.crypto_wake_req_q,
+                             dut.u_probe.acl_cfg_pending_q,
+                             dut.u_probe.ingress_meta_valid_w,
+                             dut.u_probe.ingress_meta_w.kind,
+                             dut.u_probe.ingress_frontend_meta_valid_w,
+                             dut.u_probe.ingress_frontend_meta_ready_w,
+                             dut.u_probe.u_ingress_frontend.meta_q.kind,
+                             dut.u_probe.u_ingress_frontend.frame_state_q,
+                             dut.u_probe.ingress_locked_w,
+                             dut.u_probe.cdc_global_rst_n_async_w,
+                             dut.u_probe.crypto_datapath_ready_w);
                     $fatal(1, "crypto clock did not wake for ACL cfg write");
                 end
             end
@@ -153,3 +184,4 @@ module tb_uart_crypto_probe_clock_gating;
     end
 
 endmodule
+

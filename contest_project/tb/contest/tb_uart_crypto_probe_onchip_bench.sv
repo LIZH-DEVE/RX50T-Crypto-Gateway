@@ -288,7 +288,7 @@ module tb_uart_crypto_probe_onchip_bench;
             #(10 * 10 * BIT_PERIODNS);
         end
 
-        if (dut.u_probe.acl_frame_active_q !== 1'b1) begin
+                                        if (dut.u_probe.acl_frame_active_q !== 1'b1) begin
             $fatal(1, "partial timed-out frame should leave datapath busy before force recovery");
         end
 

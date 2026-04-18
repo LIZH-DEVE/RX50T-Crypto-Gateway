@@ -38,6 +38,15 @@ set source_files [list \
     [file join $contest_root rtl contest contest_crypto_block_engine.sv] \
     [file join $contest_root rtl contest contest_crypto_axis_core.sv] \
     [file join $contest_root rtl contest contest_trace_buffer.sv] \
+    [file join $contest_root rtl contest contest_cdc_ingress_pkg.sv] \
+    [file join $contest_root rtl contest contest_reset_sync.sv] \
+    [file join $contest_root rtl contest contest_async_axis_fifo.sv] \
+    [file join $contest_root rtl contest contest_async_mailbox.sv] \
+    [file join $contest_root rtl contest contest_async_pulse.sv] \
+    [file join $contest_root rtl contest contest_crypto_cdc_ingress_bridge.sv] \
+    [file join $contest_root rtl contest contest_cdc_payload_dispatcher.sv] \
+    [file join $contest_root rtl contest contest_ingress_clk_gen.sv] \
+    [file join $contest_root rtl contest contest_uart_cdc_ingress_frontend.sv] \
     [file join $contest_root rtl contest contest_uart_crypto_probe.sv] \
     [file join $contest_root rtl contest rx50t_uart_crypto_probe_top.sv] \
     [file join $contest_root rtl contest rx50t_uart_crypto_probe_board_top.sv] \

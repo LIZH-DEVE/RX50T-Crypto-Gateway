@@ -303,18 +303,18 @@ def main() -> int:
         print("[EXPECT] trace metadata response plus paged trace data")
     else:
         print(f"[TX] {format_hex(case.tx)}")
-    if not args.query_trace and args.query_stats and case.expected is None:
-        print("[EXPECT] stats response with 5 counters")
-    elif args.query_rule_stats and case.expected is None:
-        print("[EXPECT] rule stats response with 8 counters")
-    elif not args.query_trace and args.query_pmu and case.expected is None:
-        print("[EXPECT] PMU snapshot response (schema v1/v2/v3)")
-    elif not args.query_trace and args.clear_pmu and case.expected is None:
-        print("[EXPECT] PMU clear ACK 55 02 4A 00")
-    elif (args.run_onchip_bench or args.force_run_onchip_bench or args.query_bench) and case.expected is None:
-        print("[EXPECT] benchmark result frame 55 14 62 01 status algo bytes cycles crc32")
-    else:
-        print(f"[EXPECT] {format_hex(case.expected)}")
+        if args.query_stats and case.expected is None:
+            print("[EXPECT] stats response with 5 counters")
+        elif args.query_rule_stats and case.expected is None:
+            print("[EXPECT] rule stats response with 8 counters")
+        elif args.query_pmu and case.expected is None:
+            print("[EXPECT] PMU snapshot response (schema v1/v2/v3)")
+        elif args.clear_pmu and case.expected is None:
+            print("[EXPECT] PMU clear ACK 55 02 4A 00")
+        elif (args.run_onchip_bench or args.force_run_onchip_bench or args.query_bench) and case.expected is None:
+            print("[EXPECT] benchmark result frame 55 14 62 01 status algo bytes cycles crc32")
+        else:
+            print(f"[EXPECT] {format_hex(case.expected)}")
 
     with serial.Serial(args.port, args.baud, timeout=0.1) as ser:
         if args.query_trace:

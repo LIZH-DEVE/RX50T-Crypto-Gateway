@@ -31,6 +31,15 @@ set source_files [list \
     [file join $contest_root rtl contest contest_uart_rx.sv] \
     [file join $contest_root rtl contest contest_uart_tx.sv] \
     [file join $contest_root rtl contest contest_parser_core.sv] \
+    [file join $contest_root rtl contest contest_cdc_ingress_pkg.sv] \
+    [file join $contest_root rtl contest contest_reset_sync.sv] \
+    [file join $contest_root rtl contest contest_async_axis_fifo.sv] \
+    [file join $contest_root rtl contest contest_async_mailbox.sv] \
+    [file join $contest_root rtl contest contest_async_pulse.sv] \
+    [file join $contest_root rtl contest contest_crypto_cdc_ingress_bridge.sv] \
+    [file join $contest_root rtl contest contest_cdc_payload_dispatcher.sv] \
+    [file join $contest_root rtl contest contest_ingress_clk_gen.sv] \
+    [file join $contest_root rtl contest contest_uart_cdc_ingress_frontend.sv] \
     [file join $contest_root rtl contest contest_block_fifo.sv] \
     [file join $contest_root rtl contest contest_acl_axis_core.sv] \
     [file join $contest_root rtl contest contest_axis_block_packer.sv] \
@@ -69,5 +78,7 @@ wait_on_run impl_1
 open_run impl_1
 report_drc -file [file join $project_dir rx50t_uart_crypto_probe_drc_impl.rpt]
 report_timing_summary -file [file join $project_dir rx50t_uart_crypto_probe_timing_impl.rpt]
+report_bus_skew -sort_by_slack -file [file join $project_dir rx50t_uart_crypto_probe_bus_skew_impl.rpt]
 report_utilization -file [file join $project_dir rx50t_uart_crypto_probe_util_impl.rpt]
+report_cdc -details -file [file join $project_dir rx50t_uart_crypto_probe_cdc_impl.rpt]
 

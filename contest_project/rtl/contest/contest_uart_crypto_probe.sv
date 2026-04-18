@@ -1,5 +1,7 @@
 `timescale 1ns/1ps
 
+import contest_cdc_ingress_pkg::*;
+
 module contest_uart_crypto_probe #(
     parameter integer CLK_HZ = 50_000_000,
     parameter integer BAUD   = 2_000_000,
@@ -67,6 +69,7 @@ module contest_uart_crypto_probe #(
     localparam [2:0] QUIESCE_CYCLES = 3'd4;
     localparam [4:0] CRYPTO_SLEEP_HOLDOFF = 5'd16;
     localparam [1:0] CRYPTO_WAKE_SETTLE_CYCLES = 2'd2;
+    localparam integer INGRESS_CLK_HZ_PARAM = (CLK_HZ == 50_000_000) ? ((CLK_HZ * 5) / 2) : CLK_HZ;
 
     localparam [2:0] BENCH_IDLE       = 3'd0;
     localparam [2:0] BENCH_PICK_HEAD  = 3'd1;
@@ -638,6 +641,56 @@ module contest_uart_crypto_probe #(
     wire [7:0] parser_payload_len;
     wire [7:0] parser_payload_count;
 
+
+    wire       clk_125m;
+    wire       ingress_locked_w;
+    wire       cdc_global_rst_n_async_w;
+    wire       cdc_link_flush_req_w;
+    wire       ingress_payload_tvalid_w;
+    wire       ingress_payload_tready_w;
+    wire [7:0] ingress_payload_tdata_w;
+    wire       ingress_payload_tlast_w;
+    wire [0:0] ingress_payload_tuser_w;
+    wire       ingress_frontend_meta_valid_w;
+    wire       ingress_frontend_meta_ready_w;
+    wire       ingress_frontend_wake_hint_pulse_w;
+    wire [CDC_META_W-1:0] ingress_frontend_meta_payload_w;
+    wire       ingress_meta_valid_w;
+    wire       ingress_meta_ready_w;
+    wire [CDC_META_W-1:0] ingress_meta_payload_w;
+    cdc_meta_t ingress_meta_w;
+    wire       ingress_meta_payload_frame_w;
+    wire       cdc_payload_root_wake_pulse_w;
+    wire       ingress_wake_root_pulse_w;
+    wire       cdc_payload_wr_full_w;
+    wire       cdc_payload_wr_almost_full_w;
+    wire       cdc_payload_rd_empty_w;
+    wire       cdc_payload_axis_tvalid_w;
+    wire       cdc_payload_axis_tready_w;
+    wire [7:0] cdc_payload_axis_tdata_w;
+    wire       cdc_payload_axis_tlast_w;
+    wire [0:0] cdc_payload_axis_tuser_w;
+    wire       cdc_action_mailbox_src_ready_w;
+    reg        cdc_action_mailbox_src_valid_q;
+    cdc_action_t cdc_action_mailbox_src_payload_q;
+    wire       cdc_action_mailbox_dst_valid_w;
+    wire [CDC_ACTION_W-1:0] cdc_action_mailbox_dst_payload_w;
+    wire       cdc_dispatch_tvalid_w;
+    wire       cdc_dispatch_tready_w;
+    wire [7:0] cdc_dispatch_tdata_w;
+    wire       cdc_dispatch_tlast_w;
+    wire [0:0] cdc_dispatch_tuser_w;
+    wire       cdc_dispatch_accept_done_crypto_w;
+    wire       cdc_dispatch_busy_w;
+    wire       cdc_dispatch_accept_done_root_w;
+    reg        cdc_link_flush_req_q;
+    reg        stream_algo_ingress_sync1_q;
+    reg        stream_algo_ingress_sync2_q;
+    reg        trace_stream_stop_block_pulse_q;
+    reg        trace_stream_stop_error_pulse_q;
+    reg        bench_run_force_q;
+    reg  [7:0] acl_frame_stream_seq_q;
+
     reg  [7:0] frame_key_q;
     reg        frame_key_valid_q;
     reg        frame_proto_error_q;
@@ -929,11 +982,14 @@ module contest_uart_crypto_probe #(
     wire       stream_last_fire_w;
     wire       clk_crypto_gated;
     wire       crypto_clock_idle_w;
+    wire       crypto_island_idle_w;
     wire       crypto_idle_sync_w;
     wire       crypto_wake_event_w;
     wire       crypto_clk_ce_w;
+    wire       crypto_link_rst_n_sync_w;
     wire       crypto_datapath_ready_w;
     wire [63:0] pmu_crypto_clock_status_flags_w;
+    reg        crypto_core_rst_n_q = 1'b0;
 
     assign pmu_tx_active_w    = (pmu_tx_kind_q != PMU_TX_NONE);
     assign pmu_tx_data_w      = pmu_tx_byte(
@@ -971,14 +1027,23 @@ module contest_uart_crypto_probe #(
         bench_prefix_byte(bench_safe_head_prefix_q, bench_bytes_in_q[3:0]) :
         bench_lfsr_q;
     assign bench_source_last_w = (bench_bytes_in_q == (BENCH_TOTAL_BYTES - 32'd1));
-    assign axis_core_in_tvalid_w = crypto_datapath_ready_w && (bench_source_mode_w ? (bench_bytes_in_q < BENCH_TOTAL_BYTES) : axis_in_pending_valid_q);
-    assign axis_core_in_tdata_w  = bench_source_mode_w ? bench_source_data_w : axis_in_pending_data_q;
-    assign axis_core_in_tlast_w  = bench_source_mode_w ? bench_source_last_w : axis_in_pending_last_q;
-    assign axis_core_in_tuser_w  = bench_source_mode_w ? bench_algo_q : axis_in_pending_user_q;
+    assign axis_core_in_tvalid_w = bench_source_mode_w ? (bench_bytes_in_q < BENCH_TOTAL_BYTES) : cdc_dispatch_tvalid_w;
+    assign axis_core_in_tdata_w  = bench_source_mode_w ? bench_source_data_w : cdc_dispatch_tdata_w;
+    assign axis_core_in_tlast_w  = bench_source_mode_w ? bench_source_last_w : cdc_dispatch_tlast_w;
+    assign axis_core_in_tuser_w  = bench_source_mode_w ? bench_algo_q : cdc_dispatch_tuser_w;
+    assign crypto_island_idle_w  = crypto_clock_idle_w && !cdc_action_mailbox_dst_valid_w && !cdc_dispatch_busy_w && cdc_payload_rd_empty_w;
     assign crypto_idle_sync_w    = crypto_idle_sync2_q;
+    assign cdc_global_rst_n_async_w = i_rst_n && ingress_locked_w;
+    assign cdc_link_flush_req_w      = cdc_link_flush_req_q || axis_soft_reset_q;
+    assign ingress_meta_w            = ingress_meta_payload_w;
+    assign ingress_meta_payload_frame_w = (ingress_meta_w.kind == CDC_META_KIND_NORMAL_PAYLOAD) ||
+                                          (ingress_meta_w.kind == CDC_META_KIND_STREAM_CHUNK);
+    assign ingress_meta_ready_w      = !ingress_meta_valid_w ? 1'b1 :
+                                        (ingress_meta_payload_frame_w ? (!acl_frame_active_q && !cdc_action_mailbox_src_valid_q && cdc_action_mailbox_src_ready_w) : 1'b1);
     assign crypto_wake_event_w   = crypto_wake_req_q ||
-                                   axis_in_pending_valid_q ||
-                                   acl_in_valid_q ||
+                                   cdc_payload_root_wake_pulse_w ||
+                                   ingress_wake_root_pulse_w ||
+                                   cdc_action_mailbox_src_valid_q ||
                                    acl_cfg_pending_q ||
                                    (bench_state_q != BENCH_IDLE) ||
                                    frame_bench_start_q ||
@@ -988,7 +1053,7 @@ module contest_uart_crypto_probe #(
     assign crypto_clk_ce_w        = !i_rst_n ? 1'b1 : crypto_clk_ce_q;
     assign crypto_datapath_ready_w = crypto_clk_ce_q && (crypto_wake_settle_count_q == 2'd0);
     assign pmu_crypto_clock_status_flags_w = {62'd0, 1'b1, crypto_clock_gated_q};
-    assign axis_in_fire_w      = !bench_source_mode_w && axis_in_pending_valid_q && axis_in_tready_w && crypto_datapath_ready_w;
+    assign axis_in_fire_w      = 1'b0;
     assign bench_source_fire_w = bench_source_mode_w && (bench_bytes_in_q < BENCH_TOTAL_BYTES) && axis_in_tready_w && crypto_datapath_ready_w;
     assign stream_payload_active_w =
         (tx_owner_q == TX_OWNER_STREAM) &&
@@ -1007,7 +1072,6 @@ module contest_uart_crypto_probe #(
     assign axis_direct_allowed_w =
         !bench_sink_mode_w &&
         !stream_session_active_q &&
-        !stream_session_fault_q &&
         !acl_frame_stream_q &&
         (stream_seq_count_q == 4'd0) &&
         (stream_payload_bytes_left_q == 8'd0);
@@ -1077,8 +1141,8 @@ module contest_uart_crypto_probe #(
     assign trace_event_bench_start_w       = (bench_state_q == BENCH_ARM) && crypto_datapath_ready_w;
     assign trace_event_bench_done_w        = (bench_state_q == BENCH_LATCH);
     assign trace_event_stream_start_w      = stream_session_active_q && !stream_session_active_prev_q;
-    assign trace_event_stream_stop_block_w = frame_stream_chunk_q && frame_stream_block_q;
-    assign trace_event_stream_stop_error_w = frame_stream_chunk_q && frame_stream_error_q && (stream_session_active_q || stream_session_fault_q);
+    assign trace_event_stream_stop_block_w = trace_stream_stop_block_pulse_q;
+    assign trace_event_stream_stop_error_w = trace_stream_stop_error_pulse_q;
 
     always @(*) begin
         trace_event_valid_q = 1'b0;
@@ -1120,7 +1184,7 @@ module contest_uart_crypto_probe #(
         end else if (trace_event_bench_start_w) begin
             trace_event_valid_q = 1'b1;
             trace_event_code_q  = 8'h05;
-            trace_event_arg0_q  = {6'd0, frame_bench_force_q, bench_algo_q};
+            trace_event_arg0_q  = {6'd0, bench_run_force_q, bench_algo_q};
             trace_event_arg1_q  = BENCH_TOTAL_BYTES[31:10];
         end else if (trace_event_stream_start_w) begin
             trace_event_valid_q = 1'b1;
@@ -1200,35 +1264,98 @@ module contest_uart_crypto_probe #(
         endcase
     end
 
-    contest_uart_rx #(
-        .CLK_HZ(CLK_HZ),
-        .BAUD  (BAUD)
-    ) u_rx (
-        .i_clk         (i_clk),
-        .i_rst_n       (i_rst_n),
-        .i_uart_rx     (i_uart_rx),
-        .o_valid       (rx_valid),
-        .o_data        (rx_data),
-        .o_frame_error (rx_frame_error)
+    contest_ingress_clk_gen #(
+        .ROOT_CLKIN_PERIOD_NS(1.0e9 / CLK_HZ),
+        .BYPASS_MMCM         (CLK_HZ != 50_000_000)
+    ) u_ingress_clk_gen (
+        .i_root_clk   (i_clk),
+        .i_rst_n_async(i_rst_n),
+        .o_ingress_clk(clk_125m),
+        .o_locked     (ingress_locked_w)
+    );
+    always @(posedge clk_125m or negedge cdc_global_rst_n_async_w) begin
+        if (!cdc_global_rst_n_async_w) begin
+            stream_algo_ingress_sync1_q <= ALG_SM4;
+            stream_algo_ingress_sync2_q <= ALG_SM4;
+        end else begin
+            stream_algo_ingress_sync1_q <= stream_session_algo_q;
+            stream_algo_ingress_sync2_q <= stream_algo_ingress_sync1_q;
+        end
+    end
+
+    contest_uart_cdc_ingress_frontend #(
+        .INGRESS_CLK_HZ(INGRESS_CLK_HZ_PARAM),
+        .BAUD          (BAUD)
+    ) u_ingress_frontend (
+        .i_ingress_clk    (clk_125m),
+        .i_root_rst_n_async(i_rst_n),
+        .i_ingress_locked (ingress_locked_w),
+        .i_link_flush_req (cdc_link_flush_req_w),
+        .i_uart_rx        (i_uart_rx),
+        .i_stream_algo    (stream_algo_ingress_sync2_q),
+        .o_payload_tvalid (ingress_payload_tvalid_w),
+        .i_payload_tready (ingress_payload_tready_w),
+        .o_payload_tdata  (ingress_payload_tdata_w),
+        .o_payload_tlast  (ingress_payload_tlast_w),
+        .o_payload_tuser  (ingress_payload_tuser_w),
+        .o_meta_valid      (ingress_frontend_meta_valid_w),
+        .i_meta_ready      (ingress_frontend_meta_ready_w),
+        .o_meta_payload    (ingress_frontend_meta_payload_w),
+        .o_wake_hint_pulse (ingress_frontend_wake_hint_pulse_w)
     );
 
-    contest_parser_core #(
-        .SOF_BYTE              (8'h55),
-        .MAX_PAYLOAD_BYTES     (255),
-        .INTERBYTE_TIMEOUT_CLKS((CLK_HZ / BAUD) * 20)
-    ) u_parser (
-        .i_clk          (i_clk),
-        .i_rst_n        (i_rst_n),
-        .i_valid        (rx_valid),
-        .i_byte         (rx_data),
-        .o_in_frame     (parser_in_frame_w),
-        .o_frame_start  (),
-        .o_payload_valid(parser_payload_valid),
-        .o_payload_byte (parser_payload_byte),
-        .o_frame_done   (parser_frame_done),
-        .o_error        (parser_error),
-        .o_payload_len  (parser_payload_len),
-        .o_payload_count(parser_payload_count)
+    contest_async_pulse u_ingress_wake_pulse (
+        .i_src_clk        (clk_125m),
+        .i_src_rst_n_async(cdc_global_rst_n_async_w),
+        .i_dst_clk        (i_clk),
+        .i_dst_rst_n_async(cdc_global_rst_n_async_w),
+        .i_pulse          (ingress_frontend_wake_hint_pulse_w),
+        .o_pulse          (ingress_wake_root_pulse_w)
+    );
+
+    contest_async_mailbox #(
+        .WIDTH(CDC_META_W)
+    ) u_ingress_meta_mailbox (
+        .i_src_clk        (clk_125m),
+        .i_src_rst_n_async(cdc_global_rst_n_async_w),
+        .i_dst_clk        (i_clk),
+        .i_dst_rst_n_async(cdc_global_rst_n_async_w),
+        .i_link_flush_req (cdc_link_flush_req_w),
+        .i_src_valid      (ingress_frontend_meta_valid_w),
+        .o_src_ready      (ingress_frontend_meta_ready_w),
+        .i_src_payload    (ingress_frontend_meta_payload_w),
+        .o_dst_valid      (ingress_meta_valid_w),
+        .i_dst_ready      (ingress_meta_ready_w),
+        .o_dst_payload    (ingress_meta_payload_w)
+    );
+
+    contest_crypto_cdc_ingress_bridge #(
+        .DATA_W            (8),
+        .USER_W            (1),
+        .DEPTH             (1024),
+        .ALMOST_FULL_MARGIN(8)
+    ) u_payload_bridge (
+        .i_ingress_clk        (clk_125m),
+        .i_ingress_rst_n_async(cdc_global_rst_n_async_w),
+        .i_root_clk           (i_clk),
+        .i_root_rst_n_async   (cdc_global_rst_n_async_w),
+        .i_crypto_clk         (clk_crypto_gated),
+        .i_crypto_rst_n_async (cdc_global_rst_n_async_w),
+        .i_link_flush_req     (cdc_link_flush_req_w),
+        .s_axis_tvalid        (ingress_payload_tvalid_w),
+        .s_axis_tready        (ingress_payload_tready_w),
+        .s_axis_tdata         (ingress_payload_tdata_w),
+        .s_axis_tlast         (ingress_payload_tlast_w),
+        .s_axis_tuser         (ingress_payload_tuser_w),
+        .m_axis_tvalid        (cdc_payload_axis_tvalid_w),
+        .m_axis_tready        (cdc_payload_axis_tready_w),
+        .m_axis_tdata         (cdc_payload_axis_tdata_w),
+        .m_axis_tlast         (cdc_payload_axis_tlast_w),
+        .m_axis_tuser         (cdc_payload_axis_tuser_w),
+        .o_root_wake_pulse    (cdc_payload_root_wake_pulse_w),
+        .o_wr_full            (cdc_payload_wr_full_w),
+        .o_wr_almost_full     (cdc_payload_wr_almost_full_w),
+        .o_rd_empty           (cdc_payload_rd_empty_w)
     );
 
     BUFGCE u_bufgce_crypto (
@@ -1237,9 +1364,69 @@ module contest_uart_crypto_probe #(
         .O (clk_crypto_gated)
     );
 
+    contest_reset_sync u_crypto_link_reset_sync (
+        .i_clk        (clk_crypto_gated),
+        .i_rst_n_async(cdc_global_rst_n_async_w),
+        .o_rst_n_sync (crypto_link_rst_n_sync_w)
+    );
+
+    always @(posedge clk_crypto_gated) begin
+        if (!crypto_link_rst_n_sync_w) begin
+            crypto_core_rst_n_q <= 1'b0;
+        end else begin
+            crypto_core_rst_n_q <= 1'b1;
+        end
+    end
+
+    contest_async_mailbox #(
+        .WIDTH(CDC_ACTION_W)
+    ) u_action_mailbox (
+        .i_src_clk        (i_clk),
+        .i_src_rst_n_async(cdc_global_rst_n_async_w),
+        .i_dst_clk        (clk_crypto_gated),
+        .i_dst_rst_n_async(cdc_global_rst_n_async_w),
+        .i_link_flush_req (cdc_link_flush_req_w),
+        .i_src_valid      (cdc_action_mailbox_src_valid_q),
+        .o_src_ready      (cdc_action_mailbox_src_ready_w),
+        .i_src_payload    (cdc_action_mailbox_src_payload_q),
+        .o_dst_valid      (cdc_action_mailbox_dst_valid_w),
+        .i_dst_ready      (cdc_dispatch_tready_w),
+        .o_dst_payload    (cdc_action_mailbox_dst_payload_w)
+    );
+
+    contest_cdc_payload_dispatcher u_payload_dispatcher (
+        .i_crypto_clk         (clk_crypto_gated),
+        .i_crypto_rst_n_async (cdc_global_rst_n_async_w),
+        .i_link_flush_req     (cdc_link_flush_req_w),
+        .s_axis_tvalid        (cdc_payload_axis_tvalid_w),
+        .s_axis_tready        (cdc_payload_axis_tready_w),
+        .s_axis_tdata         (cdc_payload_axis_tdata_w),
+        .s_axis_tlast         (cdc_payload_axis_tlast_w),
+        .s_axis_tuser         (cdc_payload_axis_tuser_w),
+        .i_action_valid       (cdc_action_mailbox_dst_valid_w),
+        .o_action_ready       (cdc_dispatch_tready_w),
+        .i_action_payload     (cdc_action_mailbox_dst_payload_w),
+        .m_axis_tvalid        (cdc_dispatch_tvalid_w),
+        .m_axis_tready        (!bench_source_mode_w && crypto_datapath_ready_w && axis_in_tready_w),
+        .m_axis_tdata         (cdc_dispatch_tdata_w),
+        .m_axis_tlast         (cdc_dispatch_tlast_w),
+        .m_axis_tuser         (cdc_dispatch_tuser_w),
+        .o_accept_done_pulse  (cdc_dispatch_accept_done_crypto_w),
+        .o_busy               (cdc_dispatch_busy_w)
+    );
+
+    contest_async_pulse u_dispatch_accept_done_pulse (
+        .i_src_clk         (clk_crypto_gated),
+        .i_src_rst_n_async (cdc_global_rst_n_async_w),
+        .i_dst_clk         (i_clk),
+        .i_dst_rst_n_async (cdc_global_rst_n_async_w),
+        .i_pulse           (cdc_dispatch_accept_done_crypto_w),
+        .o_pulse           (cdc_dispatch_accept_done_root_w)
+    );
+
     contest_crypto_axis_core u_axis_core (
         .i_clk                 (clk_crypto_gated),
-        .i_rst_n               (i_rst_n),
+        .i_rst_n               (crypto_core_rst_n_q),
         .i_soft_reset          (axis_soft_reset_q && crypto_datapath_ready_w),
         .s_axis_tvalid         (axis_core_in_tvalid_w),
         .s_axis_tready         (axis_in_tready_w),
@@ -1310,7 +1497,7 @@ module contest_uart_crypto_probe #(
             crypto_idle_sync1_q        <= 1'b0;
             crypto_idle_sync2_q        <= 1'b0;
         end else begin
-            crypto_idle_sync1_q <= crypto_clock_idle_w;
+            crypto_idle_sync1_q <= crypto_island_idle_w;
             crypto_idle_sync2_q <= crypto_idle_sync1_q;
 
             if (crypto_wake_event_w) begin
@@ -1566,27 +1753,36 @@ module contest_uart_crypto_probe #(
             fatal_tx_idx_q            <= 2'd0;
             crypto_wake_req_q         <= 1'b0;
             crc_pipe_data_q           <= 8'd0;
+            cdc_action_mailbox_src_valid_q <= 1'b0;
+            cdc_action_mailbox_src_payload_q <= '0;
+            cdc_link_flush_req_q      <= 1'b0;
+            trace_stream_stop_block_pulse_q <= 1'b0;
+            trace_stream_stop_error_pulse_q <= 1'b0;
+            bench_run_force_q         <= 1'b0;
+            acl_frame_stream_seq_q    <= 8'd0;
         end else begin
             acl_in_valid_q    <= 1'b0;
             acl_in_data_q     <= 8'd0;
             acl_in_last_q     <= 1'b0;
-            if (fatal_pending_q && !fatal_tx_active_q && !quiesce_active_q && !drain_committed_q) begin
-                axis_soft_reset_q         <= 1'b1;
-                stream_session_active_q   <= 1'b0;
-                stream_session_fault_q    <= 1'b1;
-                acl_frame_active_q        <= 1'b0;
-                acl_in_valid_q           <= 1'b0;
-                stream_seq_wr_ptr_q       <= 3'd0;
-                stream_seq_rd_ptr_q       <= 3'd0;
-                stream_seq_count_q        <= 4'd0;
-                stream_payload_bytes_left_q <= 8'd0;
-                stream_tx_kind_q          <= STREAM_TX_NONE;
-                stream_pending_kind_q     <= STREAM_TX_NONE;
-                quiesce_active_q          <= 1'b1;
-                quiesce_count_q           <= 3'd0;
-                drain_committed_q         <= 1'b0;
-            end else begin
+            if (axis_soft_reset_q && crypto_datapath_ready_w) begin
                 axis_soft_reset_q <= 1'b0;
+            end
+
+            if (fatal_pending_q && !fatal_tx_active_q && !quiesce_active_q && !drain_committed_q) begin
+                axis_soft_reset_q          <= 1'b1;
+                stream_session_active_q    <= 1'b0;
+                stream_session_fault_q     <= 1'b1;
+                acl_frame_active_q         <= 1'b0;
+                acl_in_valid_q             <= 1'b0;
+                stream_seq_wr_ptr_q        <= 3'd0;
+                stream_seq_rd_ptr_q        <= 3'd0;
+                stream_seq_count_q         <= 4'd0;
+                stream_payload_bytes_left_q <= 8'd0;
+                stream_tx_kind_q           <= STREAM_TX_NONE;
+                stream_pending_kind_q      <= STREAM_TX_NONE;
+                quiesce_active_q           <= 1'b1;
+                quiesce_count_q            <= 3'd0;
+                drain_committed_q          <= 1'b0;
             end
 
             stream_session_active_prev_q <= stream_session_active_q;
@@ -1952,560 +2148,387 @@ module contest_uart_crypto_probe #(
                 end
             endcase
 
-            if (parser_error || rx_frame_error) begin
-                pending_error_q           <= 1'b1;
-                stat_error_frames_q       <= stat_error_frames_q + 8'd1;
-                frame_key_valid_q         <= 1'b0;
-                frame_proto_error_q       <= 1'b0;
-                frame_query_q             <= 1'b0;
-                frame_rule_query_q        <= 1'b0;
-                frame_keymap_query_q      <= 1'b0;
-                frame_trace_meta_q        <= 1'b0;
-                frame_trace_page_q        <= 1'b0;
-                frame_trace_page_idx_q    <= 8'd0;
-                frame_pmu_query_q         <= 1'b0;
-                frame_pmu_clear_q         <= 1'b0;
-                frame_bench_query_q       <= 1'b0;
-                frame_bench_start_q       <= 1'b0;
-                frame_bench_force_q       <= 1'b0;
-                frame_bench_force_seen_q  <= 1'b0;
-                frame_bench_algo_valid_q  <= 1'b0;
-                frame_bench_algo_q        <= ALG_SM4;
-                frame_cfg_q               <= 1'b0;
-                frame_cfg_key_seen_q      <= 1'b0;
-                frame_algo_sel_q          <= ALG_SM4;
-                frame_stream_cap_q        <= 1'b0;
-                frame_stream_start_q      <= 1'b0;
-                frame_stream_chunk_q      <= 1'b0;
-                frame_stream_error_q      <= 1'b0;
-                frame_stream_error_code_q <= 8'd0;
-                frame_stream_block_q      <= 1'b0;
-                if (stream_session_active_q) begin
-                    stream_session_active_q <= 1'b0;
-                    stream_session_fault_q  <= 1'b1;
-                    stream_expected_valid_q <= 1'b0;
-                end
+            frame_query_q             <= 1'b0;
+            frame_rule_query_q        <= 1'b0;
+            frame_keymap_query_q      <= 1'b0;
+            frame_trace_meta_q        <= 1'b0;
+            frame_trace_page_q        <= 1'b0;
+            frame_trace_page_idx_q    <= 8'd0;
+            frame_pmu_query_q         <= 1'b0;
+            frame_pmu_clear_q         <= 1'b0;
+            frame_bench_query_q       <= 1'b0;
+            frame_bench_start_q       <= 1'b0;
+            frame_bench_force_q       <= 1'b0;
+            frame_bench_force_seen_q  <= 1'b0;
+            frame_bench_algo_valid_q  <= 1'b0;
+            frame_bench_algo_q        <= ALG_SM4;
+            frame_cfg_q               <= 1'b0;
+            frame_cfg_index_q         <= 8'd0;
+            frame_cfg_key_q           <= 128'd0;
+            frame_cfg_key_seen_q      <= 1'b0;
+            frame_algo_sel_q          <= ALG_SM4;
+            frame_stream_cap_q        <= 1'b0;
+            frame_stream_start_q      <= 1'b0;
+            frame_stream_chunk_q      <= 1'b0;
+            frame_stream_error_q      <= 1'b0;
+            frame_stream_error_code_q <= 8'd0;
+            frame_stream_start_alg_q  <= ALG_SM4;
+            frame_stream_start_total_q <= 16'd0;
+            frame_stream_seq_q        <= 8'd0;
+            frame_stream_block_q      <= 1'b0;
+            frame_stream_block_slot_q <= 3'd0;
+            frame_key_q               <= 8'd0;
+            frame_key_valid_q         <= 1'b0;
+            frame_proto_error_q       <= 1'b0;
+            trace_stream_stop_block_pulse_q <= 1'b0;
+            trace_stream_stop_error_pulse_q <= 1'b0;
+            cdc_link_flush_req_q      <= 1'b0;
+
+            if (cdc_action_mailbox_src_valid_q && cdc_action_mailbox_src_ready_w) begin
+                cdc_action_mailbox_src_valid_q   <= 1'b0;
+                cdc_action_mailbox_src_payload_q <= '0;
             end
 
-            if (parser_payload_valid) begin
-                if (acl_cfg_busy) begin
-                    frame_proto_error_q <= 1'b1;
-                end else if (parser_payload_count == 8'd1) begin
-                    frame_key_q               <= 8'd0;
-                    frame_key_valid_q         <= 1'b0;
-                    acl_block_seen_q          <= 1'b0;
-                    frame_cfg_index_q         <= 8'd0;
-                    frame_cfg_key_q           <= 128'd0;
-                    frame_cfg_key_seen_q      <= 1'b0;
-                    frame_stream_cap_q        <= 1'b0;
-                    frame_pmu_query_q         <= 1'b0;
-                    frame_pmu_clear_q         <= 1'b0;
-                    frame_bench_query_q       <= 1'b0;
-                    frame_bench_start_q       <= 1'b0;
-                    frame_bench_force_q       <= 1'b0;
-                    frame_bench_force_seen_q  <= 1'b0;
-                    frame_bench_algo_valid_q  <= 1'b0;
-                    frame_bench_algo_q        <= ALG_SM4;
-                    frame_stream_start_q      <= 1'b0;
-                    frame_stream_chunk_q      <= 1'b0;
-                    frame_stream_error_q      <= 1'b0;
-                    frame_stream_error_code_q <= 8'd0;
-                    frame_stream_start_alg_q  <= ALG_SM4;
-                    frame_stream_start_total_q <= 16'd0;
-                    frame_stream_seq_q        <= 8'd0;
-                    frame_stream_block_q      <= 1'b0;
-                    frame_stream_block_slot_q <= 3'd0;
-
-                    if ((parser_payload_len == 8'd1) && (parser_payload_byte == ASCII_QUERY)) begin
-                        frame_query_q <= 1'b1;
-                    end else if ((parser_payload_len == 8'd1) && (parser_payload_byte == ASCII_RULE)) begin
-                        frame_rule_query_q <= 1'b1;
-                    end else if ((parser_payload_len == 8'd1) && (parser_payload_byte == ASCII_KEYMAP)) begin
-                        frame_keymap_query_q <= 1'b1;
-                    end else if ((parser_payload_len == 8'd1) && (parser_payload_byte == ASCII_TRACE)) begin
-                        frame_trace_meta_q <= 1'b1;
-                    end else if ((parser_payload_len == 8'd2) && (parser_payload_byte == ASCII_TRACE)) begin
-                        frame_trace_page_q <= 1'b1;
-                    end else if ((parser_payload_len == 8'd1) && (parser_payload_byte == ASCII_PMU_QRY)) begin
-                        frame_pmu_query_q <= 1'b1;
-                    end else if ((parser_payload_len == 8'd1) && (parser_payload_byte == ASCII_PMU_CLR)) begin
-                        frame_pmu_clear_q <= 1'b1;
-                    end else if ((parser_payload_len == 8'd1) && (parser_payload_byte == ASCII_BENCH)) begin
-                        frame_bench_query_q <= 1'b1;
-                    end else if ((parser_payload_len == 8'd2) && (parser_payload_byte == ASCII_BENCH)) begin
-                        frame_bench_start_q <= 1'b1;
-                    end else if ((parser_payload_len == 8'd3) && (parser_payload_byte == ASCII_BENCH)) begin
-                        frame_bench_force_q <= 1'b1;
-                    end else if ((parser_payload_len == 8'd1) && (parser_payload_byte == STREAM_CAP_QUERY)) begin
-                        frame_stream_cap_q <= 1'b1;
-                    end else if ((parser_payload_len == 8'd18) && (parser_payload_byte == ASCII_CFG_ACK)) begin
-                        frame_cfg_q <= 1'b1;
-                        crypto_wake_req_q <= 1'b1;
-                    end else if ((parser_payload_len == 8'd4) && (parser_payload_byte == STREAM_START_OP)) begin
-                        frame_stream_start_q <= 1'b1;
-                    end else if ((parser_payload_len == 8'h81) &&
-                                 (stream_session_active_q ||
-                                  stream_session_fault_q ||
-                                  (parser_payload_byte != MODE_AES))) begin
-                        frame_stream_chunk_q <= 1'b1;
-                        frame_stream_seq_q   <= parser_payload_byte;
-                        if (!stream_session_active_q) begin
-                            frame_stream_error_q      <= 1'b1;
-                            frame_stream_error_code_q <= STREAM_ERR_STATE;
-                        end else if (stream_expected_valid_q &&
-                                     (parser_payload_byte != stream_expected_seq_q)) begin
-                            frame_stream_error_q      <= 1'b1;
-                            frame_stream_error_code_q <= STREAM_ERR_SEQ;
-                        end else begin
-                            acl_frame_algo_q   <= stream_session_algo_q;
-                            acl_frame_active_q <= 1'b1;
-                            acl_frame_stream_q <= 1'b1;
-                        end
-                    end else if (is_explicit_mode_length(parser_payload_len)) begin
-                        if (parser_payload_byte == MODE_AES) begin
-                            frame_algo_sel_q <= ALG_AES;
-                        end else if (parser_payload_byte == MODE_SM4) begin
-                            frame_algo_sel_q <= ALG_SM4;
-                        end else begin
-                            frame_proto_error_q <= 1'b1;
-                        end
-                    end else begin
-                        frame_algo_sel_q   <= ALG_SM4;
-                        frame_key_q        <= parser_payload_byte;
-                        frame_key_valid_q  <= 1'b1;
-                        acl_frame_algo_q   <= ALG_SM4;
-                        acl_frame_active_q <= 1'b1;
-                        acl_frame_stream_q <= 1'b0;
-                        acl_in_valid_q     <= 1'b1;
-                        acl_in_data_q      <= parser_payload_byte;
-                        acl_in_last_q      <= parser_frame_done;
-                    end
-                end else if (frame_cfg_q) begin
-                    if (parser_payload_count == 8'd2) begin
-                        frame_cfg_index_q <= parser_payload_byte;
-                    end else if (parser_payload_count >= 8'd3 && parser_payload_count <= 8'd18) begin
-                        frame_cfg_key_q <= {frame_cfg_key_q[119:0], parser_payload_byte};
-                        if (parser_payload_count == 8'd18) begin
-                            frame_cfg_key_seen_q <= 1'b1;
-                        end
-                    end
-                end else if (frame_trace_page_q) begin
-                    if (parser_payload_count == 8'd2) begin
-                        frame_trace_page_idx_q <= parser_payload_byte;
-                    end
-                end else if (frame_stream_start_q) begin
-                    if (parser_payload_count == 8'd2) begin
-                        if (parser_payload_byte == MODE_AES) begin
-                            frame_stream_start_alg_q <= ALG_AES;
-                        end else if (parser_payload_byte == MODE_SM4) begin
-                            frame_stream_start_alg_q <= ALG_SM4;
-                        end else begin
-                            frame_stream_error_q      <= 1'b1;
-                            frame_stream_error_code_q <= STREAM_ERR_FORMAT;
-                        end
-                    end else if (parser_payload_count == 8'd3) begin
-                        frame_stream_start_total_q[15:8] <= parser_payload_byte;
-                    end else if (parser_payload_count == 8'd4) begin
-                        frame_stream_start_total_q[7:0] <= parser_payload_byte;
-                    end
-                end else if (frame_bench_start_q) begin
-                    if (parser_payload_count == 8'd2) begin
-                        if (parser_payload_byte == MODE_AES) begin
-                            frame_bench_algo_q       <= ALG_AES;
-                            frame_bench_algo_valid_q <= 1'b1;
-                        end else if (parser_payload_byte == MODE_SM4) begin
-                            frame_bench_algo_q       <= ALG_SM4;
-                            frame_bench_algo_valid_q <= 1'b1;
-                        end else begin
-                            frame_proto_error_q <= 1'b1;
-                        end
-                    end
-                end else if (frame_bench_force_q) begin
-                    if (parser_payload_count == 8'd2) begin
-                        if (parser_payload_byte == 8'hFF) begin
-                            frame_bench_force_seen_q <= 1'b1;
-                        end else begin
-                            frame_proto_error_q <= 1'b1;
-                        end
-                    end else if (parser_payload_count == 8'd3) begin
-                        if (parser_payload_byte == MODE_AES) begin
-                            frame_bench_algo_q       <= ALG_AES;
-                            frame_bench_algo_valid_q <= 1'b1;
-                        end else if (parser_payload_byte == MODE_SM4) begin
-                            frame_bench_algo_q       <= ALG_SM4;
-                            frame_bench_algo_valid_q <= 1'b1;
-                        end else begin
-                            frame_proto_error_q <= 1'b1;
-                        end
-                    end
-                end else if (frame_stream_chunk_q) begin
-                    if (!frame_stream_error_q) begin
-                        if (!frame_key_valid_q) begin
-                            frame_key_q       <= parser_payload_byte;
-                            frame_key_valid_q <= 1'b1;
-                        end
-                        acl_in_valid_q <= 1'b1;
-                        acl_in_data_q  <= parser_payload_byte;
-                        acl_in_last_q  <= parser_frame_done;
-                    end
-                end else if (!frame_query_q &&
-                             !frame_rule_query_q &&
-                             !frame_keymap_query_q &&
-                             !frame_trace_meta_q &&
-                             !frame_trace_page_q &&
-                             !frame_pmu_query_q &&
-                             !frame_pmu_clear_q &&
-                             !frame_stream_cap_q &&
-                             !frame_proto_error_q) begin
-                    if (!frame_key_valid_q) begin
-                        frame_key_q       <= parser_payload_byte;
-                        frame_key_valid_q <= 1'b1;
-                    end
-                    if (!acl_frame_active_q) begin
-                        acl_frame_algo_q   <= frame_algo_sel_q;
-                        acl_frame_active_q <= 1'b1;
-                        acl_frame_stream_q <= 1'b0;
-                    end
-                    acl_in_valid_q <= 1'b1;
-                    acl_in_data_q  <= parser_payload_byte;
-                    acl_in_last_q  <= parser_frame_done;
+            if (cdc_dispatch_accept_done_root_w && acl_frame_active_q) begin
+                stat_total_frames_q <= stat_total_frames_q + 8'd1;
+                if (acl_block_seen_q) begin
+                    stat_acl_blocks_q      <= stat_acl_blocks_q + 8'd1;
+                    pmu_acl_block_events_q <= pmu_acl_block_events_q + 64'd1;
+                end else if (acl_frame_algo_q == ALG_AES) begin
+                    stat_aes_frames_q <= stat_aes_frames_q + 8'd1;
+                end else begin
+                    stat_sm4_frames_q <= stat_sm4_frames_q + 8'd1;
                 end
+                acl_frame_active_q     <= 1'b0;
+                acl_frame_algo_q       <= ALG_SM4;
+                acl_frame_stream_q     <= 1'b0;
+                acl_frame_stream_seq_q <= 8'd0;
+                acl_block_seen_q       <= 1'b0;
             end
 
-            if (parser_frame_done) begin
-                if (!frame_pmu_query_q && !frame_pmu_clear_q && !frame_bench_query_q) begin
+            if (ingress_meta_valid_w && ingress_meta_ready_w) begin
+                if ((ingress_meta_w.kind != CDC_META_KIND_PMU_QUERY) &&
+                    (ingress_meta_w.kind != CDC_META_KIND_PMU_CLEAR) &&
+                    (ingress_meta_w.kind != CDC_META_KIND_BENCH_QUERY)) begin
                     pmu_armed_q <= 1'b1;
                 end
 
-                if (((parser_payload_valid && (parser_payload_count == 8'd1) &&
-                      (parser_payload_len == 8'd1) && (parser_payload_byte == ASCII_PMU_QRY))) ||
-                    frame_pmu_query_q) begin
-                    pmu_snap_global_cycles_q             <= pmu_global_cycles_q;
-                    pmu_snap_crypto_active_cycles_q      <= pmu_crypto_active_cycles_q;
-                    pmu_snap_uart_tx_stall_cycles_q      <= pmu_uart_tx_stall_cycles_q;
-                    pmu_snap_stream_credit_block_cycles_q <= pmu_stream_credit_block_cycles_q;
-                    pmu_snap_acl_block_events_q          <= pmu_acl_block_events_q;
-                    pmu_snap_stream_bytes_in_q           <= pmu_stream_bytes_in_q;
-                    pmu_snap_stream_bytes_out_q          <= pmu_stream_bytes_out_q;
-                    pmu_snap_stream_chunk_count_q        <= pmu_stream_chunk_count_q;
-                    pmu_snap_crypto_clock_gated_cycles_q <= pmu_crypto_clock_gated_cycles_q;
-                    pmu_snap_crypto_clock_status_flags_q <= pmu_crypto_clock_status_flags_w;
-                    pmu_pending_q                        <= 1'b1;
-                    pmu_pending_kind_q                   <= PMU_TX_SNAPSHOT;
-                end else if (((parser_payload_valid && (parser_payload_count == 8'd1) &&
-                               (parser_payload_len == 8'd1) && (parser_payload_byte == ASCII_PMU_CLR))) ||
-                              frame_pmu_clear_q) begin
-                    pmu_armed_q                         <= 1'b0;
-                    pmu_global_cycles_q                 <= 64'd0;
-                    pmu_crypto_active_cycles_q          <= 64'd0;
-                    pmu_uart_tx_stall_cycles_q          <= 64'd0;
-                    pmu_stream_credit_block_cycles_q    <= 64'd0;
-                    pmu_acl_block_events_q              <= 64'd0;
-                    pmu_stream_bytes_in_q               <= 64'd0;
-                    pmu_stream_bytes_out_q              <= 64'd0;
-                    pmu_stream_chunk_count_q            <= 64'd0;
-                    pmu_crypto_clock_gated_cycles_q     <= 64'd0;
-                    pmu_snap_global_cycles_q            <= 64'd0;
-                    pmu_snap_crypto_active_cycles_q     <= 64'd0;
-                    pmu_snap_uart_tx_stall_cycles_q     <= 64'd0;
-                    pmu_snap_stream_credit_block_cycles_q <= 64'd0;
-                    pmu_snap_acl_block_events_q         <= 64'd0;
-                    pmu_snap_stream_bytes_in_q          <= 64'd0;
-                    pmu_snap_stream_bytes_out_q         <= 64'd0;
-                    pmu_snap_stream_chunk_count_q       <= 64'd0;
-                    pmu_snap_crypto_clock_gated_cycles_q <= 64'd0;
-                    pmu_snap_crypto_clock_status_flags_q <= 64'd0;
-                    pmu_pending_q                       <= 1'b1;
-                    pmu_pending_kind_q                  <= PMU_TX_CLEAR_ACK;
-                end else if (((parser_payload_valid && (parser_payload_count == 8'd1) &&
-                               (parser_payload_len == 8'd1) && (parser_payload_byte == ASCII_BENCH))) ||
-                              frame_bench_query_q) begin
-                    bench_pending_q      <= 1'b1;
-                    bench_pending_status_q <= bench_result_valid_q ? bench_last_status_q : BENCH_STATUS_NO_RESULT;
-                    bench_pending_algo_q   <= bench_result_valid_q ? bench_last_algo_q : ALG_SM4;
-                    bench_pending_bytes_q  <= bench_result_valid_q ? bench_last_bytes_q : 32'd0;
-                    bench_pending_cycles_q <= bench_result_valid_q ? bench_last_cycles_q : 64'd0;
-                    bench_pending_crc32_q  <= bench_result_valid_q ? bench_last_crc32_q : 32'd0;
-                end else if (frame_bench_start_q || frame_bench_force_q) begin
-                    if ((!(frame_bench_algo_valid_q ||
-                           (frame_bench_start_q &&
-                            parser_payload_valid &&
-                            (parser_payload_count == 8'd2) &&
-                            ((parser_payload_byte == MODE_AES) || (parser_payload_byte == MODE_SM4))) ||
-                           (frame_bench_force_q &&
-                            parser_payload_valid &&
-                            (parser_payload_count == 8'd3) &&
-                            ((parser_payload_byte == MODE_AES) || (parser_payload_byte == MODE_SM4))))) ||
-                        (frame_bench_force_q &&
-                         !(frame_bench_force_seen_q ||
-                           (parser_payload_valid &&
-                            (parser_payload_count == 8'd2) &&
-                            (parser_payload_byte == 8'hFF))))) begin
+                case (ingress_meta_w.kind)
+                                        CDC_META_KIND_ABORT_FLUSH: begin
                         pending_error_q     <= 1'b1;
                         stat_error_frames_q <= stat_error_frames_q + 8'd1;
-                    end else if (frame_bench_force_q) begin
-                        axis_soft_reset_q       <= 1'b1;
-                        axis_in_pending_clear_q   <= 1'b1;
-                        acl_frame_active_q        <= 1'b0;
-                        acl_frame_algo_q          <= ALG_SM4;
-                        acl_frame_stream_q        <= 1'b0;
-                        acl_in_valid_q            <= 1'b0;
-                        acl_in_data_q             <= 8'd0;
-                        acl_in_last_q             <= 1'b0;
-                        frame_stream_block_q      <= 1'b0;
-                        frame_stream_block_slot_q <= 3'd0;
-                        stream_session_active_q   <= 1'b0;
-                        stream_session_fault_q    <= 1'b0;
-                        stream_expected_valid_q   <= 1'b0;
-                        stream_expected_seq_q     <= 8'd0;
-                        stream_seq_wr_ptr_q       <= 3'd0;
-                        stream_seq_rd_ptr_q       <= 3'd0;
-                        stream_seq_count_q        <= 4'd0;
-                        stream_payload_bytes_left_q <= 8'd0;
-                        stream_tx_kind_q          <= STREAM_TX_NONE;
-                        stream_tx_idx_q           <= 3'd0;
-                        stream_pending_kind_q     <= STREAM_TX_NONE;
-                        stream_pending_seq_q      <= 8'd0;
-                        stream_pending_slot_q     <= 3'd0;
-                        stream_pending_code_q     <= 8'd0;
-                        if ((tx_owner_q == TX_OWNER_STREAM) || (tx_owner_q == TX_OWNER_AXIS)) begin
-                            tx_owner_q            <= TX_OWNER_NONE;
+                        frame_proto_error_q <= 1'b1;
+                        if (!(acl_frame_active_q && !acl_frame_stream_q)) begin
+                            cdc_link_flush_req_q           <= 1'b1;
+                            cdc_action_mailbox_src_valid_q <= 1'b0;
+                            cdc_action_mailbox_src_payload_q <= '0;
+                            acl_frame_active_q             <= 1'b0;
+                            acl_frame_algo_q               <= ALG_SM4;
+                            acl_frame_stream_q             <= 1'b0;
+                            acl_frame_stream_seq_q         <= 8'd0;
+                            acl_block_seen_q               <= 1'b0;
+                            if (stream_session_active_q || stream_session_fault_q) begin
+                                stream_session_active_q <= 1'b0;
+                                stream_session_fault_q  <= 1'b1;
+                                stream_expected_valid_q <= 1'b0;
+                            end
                         end
-                        bench_algo_q              <=
-                            (parser_payload_valid &&
-                             (parser_payload_count == 8'd3) &&
-                             (parser_payload_byte == MODE_AES)) ? ALG_AES :
-                            ((parser_payload_valid &&
-                              (parser_payload_count == 8'd3) &&
-                              (parser_payload_byte == MODE_SM4)) ? ALG_SM4 :
-                             frame_bench_algo_q);
-                        bench_pick_idx_q          <= 4'd0;
-                        bench_state_q             <= BENCH_PICK_HEAD;
-                    end else if (parser_in_frame_w ||
-                                 axis_in_pending_valid_q ||
-                                 acl_frame_active_q ||
-                                 stream_session_active_q ||
-                                 (stream_pending_kind_q != STREAM_TX_NONE) ||
-                                 stream_tx_active_w ||
-                                 ctrl_active_w ||
-                                 pending_error_q ||
-                                 pending_block_q ||
-                                 pending_cfg_ack_q ||
-                                 pending_keymap_q ||
-                                 pending_rule_stats_q ||
-                                 pending_stats_q ||
-                                 pmu_pending_q ||
-                                 pmu_tx_active_w ||
-                                 bench_pending_q ||
-                                 bench_tx_active_w ||
-                                 axis_out_tvalid_w ||
-                                 pmu_crypto_active_w ||
-                                 (bench_state_q != BENCH_IDLE)) begin
-                        bench_pending_q      <= 1'b1;
-                        bench_pending_status_q <= BENCH_STATUS_BUSY;
-                        bench_pending_algo_q   <=
-                            (parser_payload_valid &&
-                             (parser_payload_count == 8'd2) &&
-                             (parser_payload_byte == MODE_AES)) ? ALG_AES :
-                            ((parser_payload_valid &&
-                              (parser_payload_count == 8'd2) &&
-                              (parser_payload_byte == MODE_SM4)) ? ALG_SM4 :
-                             frame_bench_algo_q);
-                        bench_pending_bytes_q  <= 32'd0;
-                        bench_pending_cycles_q <= 64'd0;
-                        bench_pending_crc32_q  <= 32'd0;
-                    end else begin
-                        bench_algo_q     <=
-                            (parser_payload_valid &&
-                             (parser_payload_count == 8'd2) &&
-                             (parser_payload_byte == MODE_AES)) ? ALG_AES :
-                            ((parser_payload_valid &&
-                              (parser_payload_count == 8'd2) &&
-                              (parser_payload_byte == MODE_SM4)) ? ALG_SM4 :
-                             frame_bench_algo_q);
-                        bench_pick_idx_q <= 4'd0;
-                        bench_state_q    <= BENCH_PICK_HEAD;
                     end
-                end else if (((parser_payload_valid && (parser_payload_count == 8'd1) &&
-                      (parser_payload_len == 8'd1) && (parser_payload_byte == STREAM_CAP_QUERY))) ||
-                    frame_stream_cap_q) begin
-                    stream_pending_kind_q <= STREAM_TX_CAP;
-                    stream_pending_seq_q  <= 8'd0;
-                    stream_pending_slot_q <= 3'd0;
-                    stream_pending_code_q <= 8'd0;
-                end else if (frame_stream_start_q) begin
-                    if (frame_stream_error_q) begin
-                        stream_pending_kind_q <= STREAM_TX_ERROR;
+
+                    CDC_META_KIND_PROTO_ERROR: begin
+                        frame_proto_error_q <= 1'b1;
+                        pending_error_q     <= 1'b1;
+                        stat_error_frames_q <= stat_error_frames_q + 8'd1;
+                    end
+
+                    CDC_META_KIND_PMU_QUERY: begin
+                        frame_pmu_query_q                    <= 1'b1;
+                        pmu_snap_global_cycles_q             <= pmu_global_cycles_q;
+                        pmu_snap_crypto_active_cycles_q      <= pmu_crypto_active_cycles_q;
+                        pmu_snap_uart_tx_stall_cycles_q      <= pmu_uart_tx_stall_cycles_q;
+                        pmu_snap_stream_credit_block_cycles_q <= pmu_stream_credit_block_cycles_q;
+                        pmu_snap_acl_block_events_q          <= pmu_acl_block_events_q;
+                        pmu_snap_stream_bytes_in_q           <= pmu_stream_bytes_in_q;
+                        pmu_snap_stream_bytes_out_q          <= pmu_stream_bytes_out_q;
+                        pmu_snap_stream_chunk_count_q        <= pmu_stream_chunk_count_q;
+                        pmu_snap_crypto_clock_gated_cycles_q <= pmu_crypto_clock_gated_cycles_q;
+                        pmu_snap_crypto_clock_status_flags_q <= pmu_crypto_clock_status_flags_w;
+                        pmu_pending_q                        <= 1'b1;
+                        pmu_pending_kind_q                   <= PMU_TX_SNAPSHOT;
+                    end
+
+                    CDC_META_KIND_PMU_CLEAR: begin
+                        frame_pmu_clear_q                     <= 1'b1;
+                        pmu_armed_q                           <= 1'b0;
+                        pmu_global_cycles_q                   <= 64'd0;
+                        pmu_crypto_active_cycles_q            <= 64'd0;
+                        pmu_uart_tx_stall_cycles_q            <= 64'd0;
+                        pmu_stream_credit_block_cycles_q      <= 64'd0;
+                        pmu_acl_block_events_q                <= 64'd0;
+                        pmu_stream_bytes_in_q                 <= 64'd0;
+                        pmu_stream_bytes_out_q                <= 64'd0;
+                        pmu_stream_chunk_count_q              <= 64'd0;
+                        pmu_crypto_clock_gated_cycles_q       <= 64'd0;
+                        pmu_snap_global_cycles_q              <= 64'd0;
+                        pmu_snap_crypto_active_cycles_q       <= 64'd0;
+                        pmu_snap_uart_tx_stall_cycles_q       <= 64'd0;
+                        pmu_snap_stream_credit_block_cycles_q <= 64'd0;
+                        pmu_snap_acl_block_events_q           <= 64'd0;
+                        pmu_snap_stream_bytes_in_q            <= 64'd0;
+                        pmu_snap_stream_bytes_out_q           <= 64'd0;
+                        pmu_snap_stream_chunk_count_q         <= 64'd0;
+                        pmu_snap_crypto_clock_gated_cycles_q  <= 64'd0;
+                        pmu_snap_crypto_clock_status_flags_q  <= 64'd0;
+                        pmu_pending_q                         <= 1'b1;
+                        pmu_pending_kind_q                    <= PMU_TX_CLEAR_ACK;
+                    end
+
+                    CDC_META_KIND_BENCH_QUERY: begin
+                        frame_bench_query_q        <= 1'b1;
+                        bench_pending_q            <= 1'b1;
+                        bench_pending_status_q     <= bench_result_valid_q ? bench_last_status_q : BENCH_STATUS_NO_RESULT;
+                        bench_pending_algo_q       <= bench_result_valid_q ? bench_last_algo_q : ALG_SM4;
+                        bench_pending_bytes_q      <= bench_result_valid_q ? bench_last_bytes_q : 32'd0;
+                        bench_pending_cycles_q     <= bench_result_valid_q ? bench_last_cycles_q : 64'd0;
+                        bench_pending_crc32_q      <= bench_result_valid_q ? bench_last_crc32_q : 32'd0;
+                    end
+
+                    CDC_META_KIND_BENCH_START,
+                    CDC_META_KIND_BENCH_FORCE: begin
+                        frame_bench_start_q      <= (ingress_meta_w.kind == CDC_META_KIND_BENCH_START);
+                        frame_bench_force_q      <= (ingress_meta_w.kind == CDC_META_KIND_BENCH_FORCE);
+                        frame_bench_algo_valid_q <= ingress_meta_w.bench_algo_valid;
+                        frame_bench_algo_q       <= ingress_meta_w.algo;
+                        frame_bench_force_seen_q <= ingress_meta_w.bench_force;
+
+                        if (!ingress_meta_w.bench_algo_valid ||
+                            ((ingress_meta_w.kind == CDC_META_KIND_BENCH_FORCE) && !ingress_meta_w.bench_force)) begin
+                            pending_error_q     <= 1'b1;
+                            stat_error_frames_q <= stat_error_frames_q + 8'd1;
+                        end else if (ingress_meta_w.kind == CDC_META_KIND_BENCH_FORCE) begin
+                            axis_soft_reset_q          <= 1'b1;
+                            acl_frame_active_q         <= 1'b0;
+                            acl_frame_algo_q           <= ALG_SM4;
+                            acl_frame_stream_q         <= 1'b0;
+                            acl_frame_stream_seq_q     <= 8'd0;
+                            acl_block_seen_q           <= 1'b0;
+                            stream_session_active_q    <= 1'b0;
+                            stream_session_fault_q     <= 1'b0;
+                            stream_expected_valid_q    <= 1'b0;
+                            stream_expected_seq_q      <= 8'd0;
+                            stream_seq_wr_ptr_q        <= 3'd0;
+                            stream_seq_rd_ptr_q        <= 3'd0;
+                            stream_seq_count_q         <= 4'd0;
+                            stream_payload_bytes_left_q <= 8'd0;
+                            stream_tx_kind_q           <= STREAM_TX_NONE;
+                            stream_tx_idx_q            <= 3'd0;
+                            stream_pending_kind_q      <= STREAM_TX_NONE;
+                            stream_pending_seq_q       <= 8'd0;
+                            stream_pending_slot_q      <= 3'd0;
+                            stream_pending_code_q      <= 8'd0;
+                            if ((tx_owner_q == TX_OWNER_STREAM) || (tx_owner_q == TX_OWNER_AXIS)) begin
+                                tx_owner_q <= TX_OWNER_NONE;
+                            end
+                            bench_algo_q      <= ingress_meta_w.algo;
+                            bench_pick_idx_q  <= 4'd0;
+                            bench_state_q     <= BENCH_PICK_HEAD;
+                            bench_run_force_q <= 1'b1;
+                        end else if (cdc_dispatch_busy_w ||
+                                     acl_frame_active_q ||
+                                     stream_session_active_q ||
+                                     (stream_pending_kind_q != STREAM_TX_NONE) ||
+                                     stream_tx_active_w ||
+                                     ctrl_active_w ||
+                                     pending_error_q ||
+                                     pending_block_q ||
+                                     pending_cfg_ack_q ||
+                                     pending_keymap_q ||
+                                     pending_rule_stats_q ||
+                                     pending_stats_q ||
+                                     pmu_pending_q ||
+                                     pmu_tx_active_w ||
+                                     bench_pending_q ||
+                                     bench_tx_active_w ||
+                                     axis_out_tvalid_w ||
+                                     pmu_crypto_active_w ||
+                                     (bench_state_q != BENCH_IDLE)) begin
+                            bench_pending_q         <= 1'b1;
+                            bench_pending_status_q  <= BENCH_STATUS_BUSY;
+                            bench_pending_algo_q    <= ingress_meta_w.algo;
+                            bench_pending_bytes_q   <= 32'd0;
+                            bench_pending_cycles_q  <= 64'd0;
+                            bench_pending_crc32_q   <= 32'd0;
+                        end else begin
+                            bench_algo_q      <= ingress_meta_w.algo;
+                            bench_pick_idx_q  <= 4'd0;
+                            bench_state_q     <= BENCH_PICK_HEAD;
+                            bench_run_force_q <= 1'b0;
+                        end
+                    end
+
+                    CDC_META_KIND_STREAM_CAP: begin
+                        frame_stream_cap_q    <= 1'b1;
+                        stream_pending_kind_q <= STREAM_TX_CAP;
                         stream_pending_seq_q  <= 8'd0;
                         stream_pending_slot_q <= 3'd0;
-                        stream_pending_code_q <= frame_stream_error_code_q;
-                        stat_error_frames_q <= stat_error_frames_q + 8'd1;
-                    end else begin
-                        stream_session_active_q <= 1'b1;
-                        stream_session_fault_q  <= 1'b0;
-                        stream_session_algo_q   <= frame_stream_start_alg_q;
-                        stream_expected_valid_q <= 1'b0;
-                        stream_expected_seq_q   <= 8'd0;
-                        stream_session_total_q  <= ((parser_payload_valid && (parser_payload_count == 8'd4)) ?
-                                                     {frame_stream_start_total_q[15:8], parser_payload_byte} :
-                                                     frame_stream_start_total_q);
-                        stream_seq_wr_ptr_q     <= 3'd0;
-                        stream_seq_rd_ptr_q     <= 3'd0;
-                        stream_seq_count_q      <= 4'd0;
+                        stream_pending_code_q <= 8'd0;
+                    end
+
+                    CDC_META_KIND_STREAM_START: begin
+                        frame_stream_start_q       <= 1'b1;
+                        frame_stream_start_alg_q   <= ingress_meta_w.algo;
+                        frame_stream_start_total_q <= ingress_meta_w.total;
+                        stream_session_active_q    <= 1'b1;
+                        stream_session_fault_q     <= 1'b0;
+                        stream_session_algo_q      <= ingress_meta_w.algo;
+                        stream_expected_valid_q    <= 1'b0;
+                        stream_expected_seq_q      <= 8'd0;
+                        stream_session_total_q     <= ingress_meta_w.total;
+                        stream_seq_wr_ptr_q        <= 3'd0;
+                        stream_seq_rd_ptr_q        <= 3'd0;
+                        stream_seq_count_q         <= 4'd0;
                         stream_payload_bytes_left_q <= 8'd0;
-                        stream_pending_kind_q   <= STREAM_TX_START_ACK;
-                        stream_pending_seq_q    <= 8'd0;
-                        stream_pending_slot_q   <= 3'd0;
-                        stream_pending_code_q   <= 8'd0;
+                        stream_pending_kind_q      <= STREAM_TX_START_ACK;
+                        stream_pending_seq_q       <= 8'd0;
+                        stream_pending_slot_q      <= 3'd0;
+                        stream_pending_code_q      <= 8'd0;
                     end
-                end else if (frame_stream_chunk_q) begin
-                    if (frame_stream_error_q) begin
-                        stream_pending_kind_q <= STREAM_TX_ERROR;
-                        stream_pending_seq_q  <= 8'd0;
-                        stream_pending_slot_q <= 3'd0;
-                        stream_pending_code_q <= frame_stream_error_code_q;
-                        stat_error_frames_q <= stat_error_frames_q + 8'd1;
-                        if (stream_session_active_q || stream_session_fault_q) begin
-                            stream_session_active_q <= 1'b0;
-                            stream_session_fault_q  <= 1'b1;
-                            stream_expected_valid_q <= 1'b0;
-                        end
-                    end else if (frame_stream_block_q) begin
-                        stat_total_frames_q     <= stat_total_frames_q + 8'd1;
-                        stat_acl_blocks_q       <= stat_acl_blocks_q + 8'd1;
-                        pmu_acl_block_events_q  <= pmu_acl_block_events_q + 64'd1;
-                        stream_session_active_q <= 1'b0;
-                        stream_session_fault_q  <= 1'b1;
-                        stream_expected_valid_q <= 1'b0;
-                        stream_pending_kind_q   <= STREAM_TX_BLOCK;
-                        stream_pending_seq_q    <= frame_stream_seq_q;
-                        stream_pending_slot_q   <= frame_stream_block_slot_q;
-                        stream_pending_code_q   <= 8'd0;
-                    end else if (frame_key_valid_q) begin
-                        stat_total_frames_q     <= stat_total_frames_q + 8'd1;
-                        stream_expected_valid_q <= 1'b1;
-                        stream_expected_seq_q   <= frame_stream_seq_q + 8'd1;
-                        if (stream_seq_count_q == STREAM_WINDOW[3:0]) begin
-                            stream_pending_kind_q   <= STREAM_TX_ERROR;
-                            stream_pending_seq_q    <= 8'd0;
-                            stream_pending_slot_q   <= 3'd0;
-                            stream_pending_code_q   <= STREAM_ERR_WINDOW;
-                            stat_error_frames_q    <= stat_error_frames_q + 8'd1;
-                            stream_session_active_q <= 1'b0;
-                            stream_session_fault_q  <= 1'b1;
-                            stream_expected_valid_q <= 1'b0;
+
+                    CDC_META_KIND_STREAM_CHUNK: begin
+                        frame_stream_chunk_q <= 1'b1;
+                        frame_stream_seq_q   <= ingress_meta_w.seq;
+                        if (!stream_session_active_q) begin
+                            frame_stream_error_q      <= 1'b1;
+                            frame_stream_error_code_q <= STREAM_ERR_STATE;
+                            trace_stream_stop_error_pulse_q <= 1'b1;
+                            stream_pending_kind_q     <= STREAM_TX_ERROR;
+                            stream_pending_code_q     <= STREAM_ERR_STATE;
+                            stream_pending_seq_q      <= 8'd0;
+                            stream_pending_slot_q     <= 3'd0;
+                            stat_error_frames_q       <= stat_error_frames_q + 8'd1;
+                            stream_session_fault_q    <= 1'b1;
+                            stream_expected_valid_q   <= 1'b0;
+                            cdc_action_mailbox_src_valid_q <= 1'b1;
+                            cdc_action_mailbox_src_payload_q.kind <= CDC_ACTION_KIND_DRAIN;
+                            cdc_action_mailbox_src_payload_q.payload_len <= ingress_meta_w.payload_len;
+                        end else if (stream_expected_valid_q && (ingress_meta_w.seq != stream_expected_seq_q)) begin
+                            frame_stream_error_q      <= 1'b1;
+                            frame_stream_error_code_q <= STREAM_ERR_SEQ;
+                            trace_stream_stop_error_pulse_q <= 1'b1;
+                            stream_pending_kind_q     <= STREAM_TX_ERROR;
+                            stream_pending_code_q     <= STREAM_ERR_SEQ;
+                            stream_pending_seq_q      <= 8'd0;
+                            stream_pending_slot_q     <= 3'd0;
+                            stat_error_frames_q       <= stat_error_frames_q + 8'd1;
+                            stream_session_active_q   <= 1'b0;
+                            stream_session_fault_q    <= 1'b1;
+                            stream_expected_valid_q   <= 1'b0;
+                            cdc_action_mailbox_src_valid_q <= 1'b1;
+                            cdc_action_mailbox_src_payload_q.kind <= CDC_ACTION_KIND_DRAIN;
+                            cdc_action_mailbox_src_payload_q.payload_len <= ingress_meta_w.payload_len;
+                        end else if (stream_seq_count_q == STREAM_WINDOW[3:0]) begin
+                            frame_stream_error_q      <= 1'b1;
+                            frame_stream_error_code_q <= STREAM_ERR_WINDOW;
+                            trace_stream_stop_error_pulse_q <= 1'b1;
+                            stream_pending_kind_q     <= STREAM_TX_ERROR;
+                            stream_pending_code_q     <= STREAM_ERR_WINDOW;
+                            stream_pending_seq_q      <= 8'd0;
+                            stream_pending_slot_q     <= 3'd0;
+                            stat_error_frames_q       <= stat_error_frames_q + 8'd1;
+                            stream_session_active_q   <= 1'b0;
+                            stream_session_fault_q    <= 1'b1;
+                            stream_expected_valid_q   <= 1'b0;
+                            cdc_action_mailbox_src_valid_q <= 1'b1;
+                            cdc_action_mailbox_src_payload_q.kind <= CDC_ACTION_KIND_DRAIN;
+                            cdc_action_mailbox_src_payload_q.payload_len <= ingress_meta_w.payload_len;
                         end else begin
-                            stream_seq_fifo_q[stream_seq_wr_ptr_q] <= frame_stream_seq_q;
-                            stream_seq_wr_ptr_q <= stream_seq_wr_ptr_q + 3'd1;
-                            stream_seq_count_q  <= stream_seq_count_q + 4'd1;
+                            cdc_action_mailbox_src_valid_q <= 1'b1;
+                            cdc_action_mailbox_src_payload_q.kind <= CDC_ACTION_KIND_ACCEPT;
+                            cdc_action_mailbox_src_payload_q.payload_len <= ingress_meta_w.payload_len;
+                            acl_frame_algo_q         <= stream_session_algo_q;
+                            acl_frame_active_q       <= 1'b1;
+                            acl_frame_stream_q       <= 1'b1;
+                            acl_frame_stream_seq_q   <= ingress_meta_w.seq;
+                            acl_block_seen_q         <= 1'b0;
+                            stream_expected_valid_q  <= 1'b1;
+                            stream_expected_seq_q    <= ingress_meta_w.seq + 8'd1;
+                            stream_seq_fifo_q[stream_seq_wr_ptr_q] <= ingress_meta_w.seq;
+                            stream_seq_wr_ptr_q      <= stream_seq_wr_ptr_q + 3'd1;
+                            stream_seq_count_q       <= stream_seq_count_q + 4'd1;
+                            pmu_stream_bytes_in_q    <= pmu_stream_bytes_in_q + {56'd0, ingress_meta_w.payload_len};
                         end
-                        if (stream_session_algo_q == ALG_AES) begin
-                            stat_aes_frames_q <= stat_aes_frames_q + 8'd1;
+                    end
+
+                    CDC_META_KIND_QUERY_STATS: begin
+                        frame_query_q          <= 1'b1;
+                        pending_stats_q        <= 1'b1;
+                        pending_stats_total_q  <= stat_total_frames_q;
+                        pending_stats_acl_q    <= stat_acl_blocks_q;
+                        pending_stats_aes_q    <= stat_aes_frames_q;
+                        pending_stats_sm4_q    <= stat_sm4_frames_q;
+                        pending_stats_err_q    <= stat_error_frames_q;
+                    end
+
+                    CDC_META_KIND_QUERY_HITS: begin
+                        frame_rule_query_q       <= 1'b1;
+                        pending_hit_stats_q      <= 1'b1;
+                        pending_hit_stats_flat_q <= acl_rule_counts_flat;
+                    end
+
+                    CDC_META_KIND_QUERY_KEYMAP: begin
+                        frame_keymap_query_q <= 1'b1;
+                        pending_keymap_q     <= 1'b1;
+                        pending_keymap_flat_q <= acl_rule_keys_flat;
+                    end
+
+                    CDC_META_KIND_TRACE_META: begin
+                        frame_trace_meta_q        <= 1'b1;
+                        pending_trace_meta_q      <= 1'b1;
+                        pending_trace_valid_count_q <= trace_valid_count_w;
+                        pending_trace_write_ptr_q <= trace_write_ptr_w;
+                        pending_trace_flags_q     <= trace_flags_w;
+                    end
+
+                    CDC_META_KIND_TRACE_PAGE: begin
+                        frame_trace_page_q <= 1'b1;
+                        if ((ingress_meta_w.trace_page_idx > 4'd15) || trace_page_busy_w) begin
+                            pending_error_q     <= 1'b1;
+                            stat_error_frames_q <= stat_error_frames_q + 8'd1;
                         end else begin
-                            stat_sm4_frames_q <= stat_sm4_frames_q + 8'd1;
+                            trace_page_req_q     <= 1'b1;
+                            trace_page_req_idx_q <= ingress_meta_w.trace_page_idx;
                         end
                     end
-                end else if (((parser_payload_valid && (parser_payload_count == 8'd1) &&
-                               (parser_payload_len == 8'd1) && (parser_payload_byte == ASCII_QUERY))) ||
-                              frame_query_q) begin
-                    pending_stats_q       <= 1'b1;
-                    pending_stats_total_q <= stat_total_frames_q;
-                    pending_stats_acl_q   <= stat_acl_blocks_q;
-                    pending_stats_aes_q   <= stat_aes_frames_q;
-                    pending_stats_sm4_q   <= stat_sm4_frames_q;
-                    pending_stats_err_q   <= stat_error_frames_q;
-                end else if (((parser_payload_valid && (parser_payload_count == 8'd1) &&
-                               (parser_payload_len == 8'd1) && (parser_payload_byte == ASCII_RULE))) ||
-                              frame_rule_query_q) begin
-                    pending_hit_stats_q       <= 1'b1;
-                    pending_hit_stats_flat_q <= acl_rule_counts_flat;
-                end else if (((parser_payload_valid && (parser_payload_count == 8'd1) &&
-                               (parser_payload_len == 8'd1) && (parser_payload_byte == ASCII_KEYMAP))) ||
-                              frame_keymap_query_q) begin
-                    pending_keymap_q      <= 1'b1;
-                    pending_keymap_flat_q <= acl_rule_keys_flat;
-                end else if (((parser_payload_valid && (parser_payload_count == 8'd1) &&
-                               (parser_payload_len == 8'd1) && (parser_payload_byte == ASCII_TRACE))) ||
-                              frame_trace_meta_q) begin
-                    pending_trace_meta_q        <= 1'b1;
-                    pending_trace_valid_count_q <= trace_valid_count_w;
-                    pending_trace_write_ptr_q   <= trace_write_ptr_w;
-                    pending_trace_flags_q       <= trace_flags_w;
-                end else if (frame_trace_page_q) begin
-                    if ((((parser_payload_valid && (parser_payload_count == 8'd2)) ? parser_payload_byte : frame_trace_page_idx_q) > 8'd15) ||
-                        trace_page_busy_w) begin
-                        pending_error_q     <= 1'b1;
-                        stat_error_frames_q <= stat_error_frames_q + 8'd1;
-                    end else begin
-                        trace_page_req_q     <= 1'b1;
-                        trace_page_req_idx_q <= ((parser_payload_valid && (parser_payload_count == 8'd2)) ?
-                                                  parser_payload_byte[3:0] : frame_trace_page_idx_q[3:0]);
-                    end
-                end else if (frame_cfg_q) begin
-                    if ((!frame_cfg_key_seen_q &&
-                         !(parser_payload_valid && (parser_payload_count == 8'd18))) ||
-                        (((parser_payload_valid && (parser_payload_count == 8'd2)) ?
-                          parser_payload_byte : frame_cfg_index_q) > 8'd7)) begin
-                        pending_error_q     <= 1'b1;
-                        stat_error_frames_q <= stat_error_frames_q + 8'd1;
-                    end else begin
+
+                    CDC_META_KIND_ACL_CFG: begin
+                        frame_cfg_q             <= 1'b1;
+                        frame_cfg_index_q       <= {5'd0, ingress_meta_w.cfg_index};
+                        frame_cfg_key_q         <= ingress_meta_w.cfg_key;
+                        frame_cfg_key_seen_q    <= 1'b1;
                         acl_cfg_pending_q       <= 1'b1;
-                        acl_cfg_pending_index_q <= frame_cfg_index_q[2:0];
-                        acl_cfg_pending_key_q   <= ((parser_payload_valid && (parser_payload_count == 8'd18)) ?
-                                                     {frame_cfg_key_q[119:0], parser_payload_byte} : frame_cfg_key_q);
-                        pending_cfg_ack_idx_q   <= frame_cfg_index_q[2:0];
-                        pending_cfg_ack_key_q   <= ((parser_payload_valid && (parser_payload_count == 8'd18)) ?
-                                                     {frame_cfg_key_q[119:0], parser_payload_byte} : frame_cfg_key_q);
+                        acl_cfg_pending_index_q <= ingress_meta_w.cfg_index;
+                        acl_cfg_pending_key_q   <= ingress_meta_w.cfg_key;
+                        pending_cfg_ack_idx_q   <= ingress_meta_w.cfg_index;
+                        pending_cfg_ack_key_q   <= ingress_meta_w.cfg_key;
                         crypto_wake_req_q       <= 1'b1;
                     end
-                end else if (frame_proto_error_q) begin
-                    pending_error_q     <= 1'b1;
-                    stat_error_frames_q <= stat_error_frames_q + 8'd1;
-                end else if (frame_key_valid_q) begin
-                    stat_total_frames_q <= stat_total_frames_q + 8'd1;
-                    if (acl_block_seen_q) begin
-                        stat_acl_blocks_q <= stat_acl_blocks_q + 8'd1;
-                        pmu_acl_block_events_q <= pmu_acl_block_events_q + 64'd1;
-                    end else if (frame_algo_sel_q == ALG_AES) begin
-                        stat_aes_frames_q <= stat_aes_frames_q + 8'd1;
-                    end else begin
-                        stat_sm4_frames_q <= stat_sm4_frames_q + 8'd1;
-                    end
-                end
 
-                frame_key_q               <= 8'd0;
-                frame_key_valid_q         <= 1'b0;
-                frame_proto_error_q       <= 1'b0;
-                frame_query_q             <= 1'b0;
-                frame_rule_query_q        <= 1'b0;
-                frame_keymap_query_q      <= 1'b0;
-                frame_trace_meta_q        <= 1'b0;
-                frame_trace_page_q        <= 1'b0;
-                frame_trace_page_idx_q    <= 8'd0;
-                frame_pmu_query_q         <= 1'b0;
-                frame_pmu_clear_q         <= 1'b0;
-                frame_bench_query_q       <= 1'b0;
-                frame_bench_start_q       <= 1'b0;
-                frame_bench_force_q       <= 1'b0;
-                frame_bench_force_seen_q  <= 1'b0;
-                frame_bench_algo_valid_q  <= 1'b0;
-                frame_bench_algo_q        <= ALG_SM4;
-                frame_cfg_q               <= 1'b0;
-                frame_cfg_index_q         <= 8'd0;
-                frame_cfg_key_q           <= 128'd0;
-                frame_cfg_key_seen_q      <= 1'b0;
-                frame_algo_sel_q          <= ALG_SM4;
-                frame_stream_cap_q        <= 1'b0;
-                frame_stream_start_q      <= 1'b0;
-                frame_stream_chunk_q      <= 1'b0;
-                frame_stream_error_q      <= 1'b0;
-                frame_stream_error_code_q <= 8'd0;
-                frame_stream_start_alg_q  <= ALG_SM4;
-                frame_stream_start_total_q <= 16'd0;
-                frame_stream_seq_q        <= 8'd0;
-                frame_stream_block_q      <= 1'b0;
-                frame_stream_block_slot_q <= 3'd0;
-                acl_block_seen_q          <= 1'b0;
+                    CDC_META_KIND_NORMAL_PAYLOAD: begin
+                        frame_key_valid_q        <= 1'b1;
+                        frame_algo_sel_q         <= ingress_meta_w.algo;
+                        cdc_action_mailbox_src_valid_q <= 1'b1;
+                        cdc_action_mailbox_src_payload_q.kind <= CDC_ACTION_KIND_ACCEPT;
+                        cdc_action_mailbox_src_payload_q.payload_len <= ingress_meta_w.payload_len;
+                        acl_frame_algo_q         <= ingress_meta_w.algo;
+                        acl_frame_active_q       <= 1'b1;
+                        acl_frame_stream_q       <= 1'b0;
+                        acl_frame_stream_seq_q   <= 8'd0;
+                        acl_block_seen_q         <= 1'b0;
+                    end
+
+                    default: begin
+                    end
+                endcase
             end
 
             if (trace_page_done_w) begin
@@ -2519,10 +2542,16 @@ module contest_uart_crypto_probe #(
             if (axis_acl_block_pulse_w) begin
                 acl_block_seen_q <= 1'b1;
                 if (acl_frame_stream_q) begin
-                    frame_stream_block_q      <= 1'b1;
-                    frame_stream_block_slot_q <= axis_acl_block_slot_valid_w ? axis_acl_block_slot_w : 3'd0;
-                    stream_session_active_q   <= 1'b0;
-                    stream_expected_valid_q   <= 1'b0;
+                    frame_stream_block_q          <= 1'b1;
+                    frame_stream_block_slot_q     <= axis_acl_block_slot_valid_w ? axis_acl_block_slot_w : 3'd0;
+                    trace_stream_stop_block_pulse_q <= 1'b1;
+                    stream_pending_kind_q         <= STREAM_TX_BLOCK;
+                    stream_pending_seq_q          <= acl_frame_stream_seq_q;
+                    stream_pending_slot_q         <= axis_acl_block_slot_valid_w ? axis_acl_block_slot_w : 3'd0;
+                    stream_pending_code_q         <= 8'd0;
+                    stream_session_active_q       <= 1'b0;
+                    stream_session_fault_q        <= 1'b1;
+                    stream_expected_valid_q       <= 1'b0;
                 end else begin
                     pending_block_q <= 1'b1;
                 end
@@ -2544,3 +2573,7 @@ module contest_uart_crypto_probe #(
     end
 
 endmodule
+
+
+
+
