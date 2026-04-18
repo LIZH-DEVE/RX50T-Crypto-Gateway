@@ -65,7 +65,7 @@ module tb_uart_crypto_probe_acl_v2;
         forever #(CLK_PERIODNS/2) clk = ~clk;
     end
 
-    initial begin
+            initial begin
         #(300_000_000);
         $fatal(1, "tb_uart_crypto_probe_acl_v2 timeout at stage %0d", stage_q);
     end

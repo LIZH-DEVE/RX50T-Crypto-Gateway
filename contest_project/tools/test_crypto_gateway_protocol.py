@@ -771,6 +771,38 @@ class CryptoGatewayProtocolTests(unittest.TestCase):
                     ):
                         self.assertEqual(cli.main(), 0)
 
+
+    def test_cli_query_trace_does_not_crash_without_case_object(self) -> None:
+        serial_port = mock.MagicMock()
+        serial_ctx = mock.MagicMock()
+        serial_ctx.__enter__.return_value = serial_port
+        serial_ctx.__exit__.return_value = False
+        trace_snapshot = mock.MagicMock()
+        trace_snapshot.meta.valid_entries = 0
+        trace_snapshot.meta.write_ptr = 0
+        trace_snapshot.meta.wrapped = False
+        trace_snapshot.meta.enabled = True
+        trace_snapshot.entries = ()
+
+        with mock.patch.object(cli.serial, "Serial", return_value=serial_ctx):
+            with mock.patch.object(cli, "query_trace_snapshot_on_serial", return_value=trace_snapshot) as trace_query:
+                with mock.patch("builtins.print"):
+                    with mock.patch.object(
+                        sys,
+                        "argv",
+                        [
+                            "send_rx50t_crypto_probe.py",
+                            "--port",
+                            "COM12",
+                            "--baud",
+                            "2000000",
+                            "--query-trace",
+                        ],
+                    ):
+                        self.assertEqual(cli.main(), 0)
+
+        trace_query.assert_called_once_with(serial_port, 3.0)
+
     def test_parse_stream_capability_response(self) -> None:
         message = parse_stream_response(bytes([0x55, 0x04, 0x57, 0x80, 0x08, 0x07]))
         self.assertEqual(message, StreamCapabilities(chunk_size=128, window=8, flags=0x07))
