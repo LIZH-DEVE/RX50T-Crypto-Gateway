@@ -901,6 +901,10 @@ module contest_uart_crypto_probe #(
 
     wire       pmu_crypto_active_w;
     wire       tx_ready;
+    wire       tx_egress_wr_full_w;
+    wire       tx_egress_wr_almost_full_w;
+    wire       tx_egress_rd_empty_w;
+    wire [7:0] tx_egress_wr_level_w;
     wire       pmu_tx_active_w;
     wire [7:0] pmu_tx_data_w;
     wire       stream_tx_active_w;
@@ -1476,16 +1480,24 @@ module contest_uart_crypto_probe #(
         .o_page_entries_flat(trace_page_entries_flat_w)
     );
 
-    contest_uart_tx #(
-        .CLK_HZ(CLK_HZ),
-        .BAUD  (BAUD)
-    ) u_tx (
-        .i_clk    (i_clk),
-        .i_rst_n  (i_rst_n),
-        .i_valid  (tx_mux_valid_w),
-        .i_data   (tx_mux_data_w),
-        .o_ready  (tx_ready),
-        .o_uart_tx(o_uart_tx)
+    contest_uart_cdc_egress_bridge #(
+        .EGRESS_CLK_HZ      (INGRESS_CLK_HZ_PARAM),
+        .BAUD               (BAUD),
+        .DEPTH              (128),
+        .ALMOST_FULL_MARGIN (8)
+    ) u_tx_egress_bridge (
+        .i_root_clk         (i_clk),
+        .i_root_rst_n_async (cdc_global_rst_n_async_w),
+        .i_egress_clk       (clk_125m),
+        .i_egress_rst_n_async(cdc_global_rst_n_async_w),
+        .i_valid            (tx_mux_valid_w),
+        .o_ready            (tx_ready),
+        .i_data             (tx_mux_data_w),
+        .o_uart_tx          (o_uart_tx),
+        .o_wr_full          (tx_egress_wr_full_w),
+        .o_wr_almost_full   (tx_egress_wr_almost_full_w),
+        .o_rd_empty         (tx_egress_rd_empty_w),
+        .o_wr_level         (tx_egress_wr_level_w)
     );
 
     always @(posedge i_clk) begin

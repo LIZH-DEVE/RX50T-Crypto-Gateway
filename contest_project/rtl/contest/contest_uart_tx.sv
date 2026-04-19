@@ -26,7 +26,7 @@ module contest_uart_tx #(
 
     assign o_ready = (state_q == ST_IDLE);
 
-    always @(posedge i_clk or negedge i_rst_n) begin
+    always @(posedge i_clk) begin
         if (!i_rst_n) begin
             state_q     <= ST_IDLE;
             clk_count_q <= 16'd0;
