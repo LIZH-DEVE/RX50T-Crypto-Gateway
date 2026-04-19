@@ -11,7 +11,7 @@ The point is not "the board powers up". The point is that the board now behaves 
 ## 2. Board Setup
 
 - board: `RX50T`
-- serial port: `COM12`
+- serial port: `<PORT>`
 - UART: `115200 8N1`
 - clock: `Y18 / 50MHz`
 - UART pins: `K1(rx) / J1(tx)`
@@ -24,7 +24,7 @@ Bitstream used for this demo:
 ### Step 1: Query Initial Stats
 
 ```powershell
-py -3 D:\FPGAhanjia\jichuangsai\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --query-stats --expect-stats 0,0,0,0,0
+py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port <PORT> --query-stats --expect-stats 0,0,0,0,0
 ```
 
 Expected:
@@ -36,7 +36,7 @@ Meaning:
 ### Step 2: Show ACL Block
 
 ```powershell
-py -3 D:\FPGAhanjia\jichuangsai\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --block-ascii XYZ
+py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port <PORT> --block-ascii XYZ
 ```
 
 Expected:
@@ -48,7 +48,7 @@ Meaning:
 ### Step 3: Show Single-Block SM4
 
 ```powershell
-py -3 D:\FPGAhanjia\jichuangsai\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --sm4-known-vector
+py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port <PORT> --sm4-known-vector
 ```
 
 Expected:
@@ -57,7 +57,7 @@ Expected:
 ### Step 4: Show Single-Block AES
 
 ```powershell
-py -3 D:\FPGAhanjia\jichuangsai\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --aes-known-vector
+py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port <PORT> --aes-known-vector
 ```
 
 Expected:
@@ -66,7 +66,7 @@ Expected:
 ### Step 5: Show Two-Block SM4
 
 ```powershell
-py -3 D:\FPGAhanjia\jichuangsai\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --sm4-two-block-vector
+py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port <PORT> --sm4-two-block-vector
 ```
 
 Expected:
@@ -78,7 +78,7 @@ Meaning:
 ### Step 6: Show Two-Block AES
 
 ```powershell
-py -3 D:\FPGAhanjia\jichuangsai\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --aes-two-block-vector
+py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port <PORT> --aes-two-block-vector
 ```
 
 Expected:
@@ -90,7 +90,7 @@ Meaning:
 ### Step 7: Show Protocol Error Handling
 
 ```powershell
-py -3 D:\FPGAhanjia\jichuangsai\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --invalid-selector
+py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port <PORT> --invalid-selector
 ```
 
 Expected:
@@ -102,7 +102,7 @@ Meaning:
 ### Step 8: Query Final Stats
 
 ```powershell
-py -3 D:\FPGAhanjia\jichuangsai\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --query-stats --expect-stats 5,1,2,2,1
+py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port <PORT> --query-stats --expect-stats 5,1,2,2,1
 ```
 
 Expected:

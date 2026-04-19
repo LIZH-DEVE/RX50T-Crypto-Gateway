@@ -65,7 +65,7 @@ def classify_probe_response(expected_block: bool, tx_payload: bytes, rx: bytes) 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Send ACL v2 probe frames to RX50T over UART.")
-    parser.add_argument("--port", required=True, help="Serial port, e.g. COM12")
+    parser.add_argument("--port", required=True, help="Serial port, for example COM7 or /dev/ttyUSB0")
     parser.add_argument("--baud", type=int, default=115200, help="Baud rate")
     parser.add_argument("--pass-hex", help="16B hex payload expected to pass through (32 hex chars)")
     parser.add_argument("--block-hex", help="16B hex payload expected to be blocked by ACL (32 hex chars)")

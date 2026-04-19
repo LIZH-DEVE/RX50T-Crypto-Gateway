@@ -93,7 +93,7 @@ def _print_bench_result(result: BenchResult, snapshot: PmuSnapshot | None = None
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Send an AES/SM4 crypto probe frame to RX50T over UART.")
-    parser.add_argument("--port", required=True, help="Serial port, e.g. COM12")
+    parser.add_argument("--port", required=True, help="Serial port, for example COM7 or /dev/ttyUSB0")
     parser.add_argument("--baud", type=int, default=2_000_000, help="Baud rate")
     parser.add_argument(
         "--sm4-known-vector",

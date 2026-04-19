@@ -2,7 +2,7 @@
 
 ## Current Board Baseline
 
-- Valid serial port: `COM12`
+- Valid serial port: `<PORT>`
 - UART: `115200 8N1`
 - Clock: `Y18 / 50MHz`
 - UART pins: `K1(rx) / J1(tx)`
@@ -18,7 +18,7 @@
 
 ## Generated Bitstream
 
-- `D:\FPGAhanjia\jichuangsai\contest_project\build\rx50t_uart_sm4_probe\rx50t_uart_sm4_probe.runs\impl_1\rx50t_uart_sm4_probe_board_top.bit`
+- `contest_project\build\rx50t_uart_sm4_probe\rx50t_uart_sm4_probe.runs\impl_1\rx50t_uart_sm4_probe_board_top.bit`
 
 ## Frame Format
 
@@ -42,7 +42,7 @@ py -3 -m pip install pyserial
 ## SM4 Known-Vector Test
 
 ```powershell
-py -3 D:\FPGAhanjia\jichuangsai\contest_project\tools\send_rx50t_sm4_probe.py --port COM12 --sm4-known-vector
+py -3 .\contest_project\tools\send_rx50t_sm4_probe.py --port <PORT> --sm4-known-vector
 ```
 
 Expected:
@@ -53,7 +53,7 @@ Expected:
 ## ACL Block-Bypass Test
 
 ```powershell
-py -3 D:\FPGAhanjia\jichuangsai\contest_project\tools\send_rx50t_sm4_probe.py --port COM12 --block-ascii XYZ
+py -3 .\contest_project\tools\send_rx50t_sm4_probe.py --port <PORT> --block-ascii XYZ
 ```
 
 Expected:

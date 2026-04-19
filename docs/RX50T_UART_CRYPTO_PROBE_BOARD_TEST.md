@@ -2,11 +2,11 @@
 
 ## Bitstream
 
-- `D:\FPGAhanjia\jichuangsai\contest_project\build\rx50t_uart_crypto_probe\rx50t_uart_crypto_probe.runs\impl_1\rx50t_uart_crypto_probe_board_top.bit`
+- `contest_project\build\rx50t_uart_crypto_probe\rx50t_uart_crypto_probe.runs\impl_1\rx50t_uart_crypto_probe_board_top.bit`
 
 ## Board bring-up
 
-- UART port: `COM12`
+- UART port: `<PORT>`
 - UART settings: `115200 8N1`
 - Clock pin: `Y18`
 - UART RX pin: `K1`
@@ -21,7 +21,7 @@ py -3 -m pip install pyserial
 ## SM4 known vector
 
 ```powershell
-py -3 D:\FPGAhanjia\jichuangsai\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --sm4-known-vector
+py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port <PORT> --sm4-known-vector
 ```
 
 Expected RX:
@@ -33,7 +33,7 @@ Expected RX:
 ## AES known vector
 
 ```powershell
-py -3 D:\FPGAhanjia\jichuangsai\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --aes-known-vector
+py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port <PORT> --aes-known-vector
 ```
 
 Expected RX:
@@ -45,7 +45,7 @@ Expected RX:
 ## ACL block path
 
 ```powershell
-py -3 D:\FPGAhanjia\jichuangsai\contest_project\tools\send_rx50t_crypto_probe.py --port COM12 --block-ascii XYZ
+py -3 .\contest_project\tools\send_rx50t_crypto_probe.py --port <PORT> --block-ascii XYZ
 ```
 
 Expected RX:

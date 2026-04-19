@@ -40,7 +40,7 @@ Its file-encryption path now accepts oversize files by slicing them into `128B` 
 ## 2. Board Baseline
 
 - board: `RX50T`
-- serial port: `COM12`
+- serial port: `<PORT>`
 - UART: `115200 8N1`
 - clock pin: `Y18`
 - clock frequency: `50MHz`
@@ -273,7 +273,7 @@ Verified:
 
 ### Real Board
 
-Verified on `COM12`:
+Verified on the selected UART port:
 - `UART Echo`
 - `parser`
 - `ACL`
@@ -440,7 +440,7 @@ It does not expose runtime ACL table writes.
 
 The latest real-board check also verified one of the newly added default ACL entries.
 
-Observed on `COM12` with short host-side spacing between frames:
+Observed on the selected UART port with short host-side spacing between frames:
 - before `XYZ`:
   - `53 00 00 00 00 00 0A`
 - `XYZ` block:
