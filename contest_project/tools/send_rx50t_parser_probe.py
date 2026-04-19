@@ -43,7 +43,7 @@ def read_response(ser: serial.Serial, timeout_s: float) -> bytes:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Send a parser-probe frame to RX50T over UART.")
-    parser.add_argument("--port", required=True, help="Serial port, e.g. COM12")
+    parser.add_argument("--port", required=True, help="Serial port, for example COM7 or /dev/ttyUSB0")
     parser.add_argument("--baud", type=int, default=115200, help="Baud rate")
     parser.add_argument("--ascii", dest="ascii_payload", help="ASCII payload, e.g. ABC")
     parser.add_argument("--hex", dest="hex_payload", help="Hex payload bytes, e.g. '41 42 43'")

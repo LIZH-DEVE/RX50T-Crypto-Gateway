@@ -189,11 +189,11 @@ class GatewayWorkerTests(unittest.TestCase):
 
         with mock.patch.object(worker_mod.serial, "Serial", return_value=fake_serial):
             with mock.patch.object(worker, "_emit") as emit:
-                worker._handle_connect("COM12", 2_000_000)
+                worker._handle_connect("COM7", 2_000_000)
 
         fake_serial.reset_input_buffer.assert_called_once_with()
         fake_serial.reset_output_buffer.assert_called_once_with()
-        emit.assert_called_once_with("connected", port="COM12", baud=2_000_000)
+        emit.assert_called_once_with("connected", port="COM7", baud=2_000_000)
         self.assertEqual(worker._connected_baud, 2_000_000)
 
     def test_stream_encrypt_file_on_serial_reports_chunk_metrics_without_flush_by_default(self) -> None:
@@ -259,7 +259,7 @@ class GatewayWorkerTests(unittest.TestCase):
         worker = worker_mod.GatewayWorker()
         fake_serial = mock.Mock()
         worker._serial = fake_serial
-        worker._connected_port = "COM12"
+        worker._connected_port = "COM7"
         worker._connected_baud = 2_000_000
 
         mock_input_path = mock.Mock()
@@ -426,7 +426,7 @@ class GatewayWorkerTests(unittest.TestCase):
         worker = worker_mod.GatewayWorker()
         fake_serial = mock.Mock()
         worker._serial = fake_serial
-        worker._connected_port = "COM12"
+        worker._connected_port = "COM7"
         worker._connected_baud = 2_000_000
 
         mock_input_path = mock.Mock()
@@ -503,7 +503,7 @@ class GatewayWorkerTests(unittest.TestCase):
         worker = worker_mod.GatewayWorker()
         fake_serial = mock.Mock()
         worker._serial = fake_serial
-        worker._connected_port = "COM12"
+        worker._connected_port = "COM7"
         worker._connected_baud = 2_000_000
 
         mock_input_path = mock.Mock()
@@ -572,7 +572,7 @@ class GatewayWorkerTests(unittest.TestCase):
         worker = worker_mod.GatewayWorker()
         fake_serial = mock.Mock()
         worker._serial = fake_serial
-        worker._connected_port = "COM12"
+        worker._connected_port = "COM7"
         worker._connected_baud = 2_000_000
 
         mock_input_path = mock.Mock()

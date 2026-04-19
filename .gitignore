@@ -5,6 +5,7 @@ Thumbs.db
 # Python
 __pycache__/
 *.pyc
+.venv/
 
 # Vivado / XSim
 .Xil/
@@ -36,6 +37,7 @@ contest_project/_tmp_*/
 contest_project/*.jou
 contest_project/*.log
 contest_project/*.pb
+contest_project/.venv/
 
 # Root temp helpers
 .tmp_proj_*/

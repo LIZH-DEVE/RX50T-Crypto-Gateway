@@ -623,7 +623,7 @@ class CryptoGatewayProtocolTests(unittest.TestCase):
                             [
                                 "send_rx50t_crypto_probe.py",
                                 "--port",
-                                "COM12",
+                                "COM7",
                                 "--baud",
                                 "2000000",
                                 "--force-run-onchip-bench",
@@ -678,7 +678,7 @@ class CryptoGatewayProtocolTests(unittest.TestCase):
                             [
                                 "send_rx50t_crypto_probe.py",
                                 "--port",
-                                "COM12",
+                                "COM7",
                                 "--baud",
                                 "2000000",
                                 "--run-onchip-bench",
@@ -729,7 +729,7 @@ class CryptoGatewayProtocolTests(unittest.TestCase):
                         [
                             "send_rx50t_crypto_probe.py",
                             "--port",
-                            "COM12",
+                            "COM7",
                             "--baud",
                             "2000000",
                             "--query-bench",
@@ -763,7 +763,7 @@ class CryptoGatewayProtocolTests(unittest.TestCase):
                         [
                             "send_rx50t_crypto_probe.py",
                             "--port",
-                            "COM12",
+                            "COM7",
                             "--baud",
                             "2000000",
                             "--query-bench",
@@ -793,7 +793,7 @@ class CryptoGatewayProtocolTests(unittest.TestCase):
                         [
                             "send_rx50t_crypto_probe.py",
                             "--port",
-                            "COM12",
+                            "COM7",
                             "--baud",
                             "2000000",
                             "--query-trace",

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections import deque
 from datetime import datetime
@@ -40,6 +40,14 @@ from crypto_gateway_protocol import (
 from crypto_gateway_worker import GatewayWorker, WorkerEvent
 
 
+def choose_default_port(current_port: str, ports: list[str]) -> str:
+    if len(ports) == 1:
+        return ports[0]
+    if current_port and current_port in ports:
+        return current_port
+    return ""
+
+
 class CryptoGatewayApp(tk.Tk):
     def _init_tk_root(self) -> None:
         try:
@@ -72,7 +80,7 @@ class CryptoGatewayApp(tk.Tk):
         self.worker.start()
 
         self.mbps_history: deque[float] = deque([0.0] * 60, maxlen=60)
-        self.current_port = tk.StringVar(value="COM12")
+        self.current_port = tk.StringVar(value="")
         self.current_baud = tk.IntVar(value=2_000_000)
         self.acl_text = tk.StringVar(value="XYZ")
         self.deploy_rule_slot = tk.IntVar(value=0)
@@ -952,8 +960,7 @@ class CryptoGatewayApp(tk.Tk):
     def _refresh_ports(self) -> None:
         ports = self.worker.list_ports()
         self.port_combo["values"] = ports
-        if ports and self.current_port.get() not in ports:
-            self.current_port.set(ports[0])
+        self.current_port.set(choose_default_port(self.current_port.get().strip(), ports))
         self._append_log(f"Detected serial ports: {', '.join(ports) if ports else 'none'}")
 
     def _connect(self) -> None:

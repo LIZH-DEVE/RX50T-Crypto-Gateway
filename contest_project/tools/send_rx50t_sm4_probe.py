@@ -34,7 +34,7 @@ def read_exact(ser: serial.Serial, expected_len: int, timeout_s: float) -> bytes
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Send an SM4 probe frame to RX50T over UART.")
-    parser.add_argument("--port", required=True, help="Serial port, e.g. COM12")
+    parser.add_argument("--port", required=True, help="Serial port, for example COM7 or /dev/ttyUSB0")
     parser.add_argument("--baud", type=int, default=115200, help="Baud rate")
     parser.add_argument(
         "--sm4-known-vector",
