@@ -95,29 +95,70 @@ set action_rd_gray_sync1_cells [get_cells {\
     u_top/u_probe/u_action_mailbox/u_mailbox_fifo/rd_gray_sync1_q_reg[1] \
 }]
 
-set_false_path -from $payload_wr_gray_src_cells -to $payload_wr_gray_sync1_cells
-set_max_delay -datapath_only 8.000 -from $payload_wr_gray_src_cells -to $payload_wr_gray_sync1_cells
-set_bus_skew 8.000 -from $payload_wr_gray_src_cells -to $payload_wr_gray_sync1_cells
+set egress_wr_gray_src_cells [get_cells {\
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/wr_gray_q_reg[0] \
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/wr_gray_q_reg[1] \
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/wr_gray_q_reg[2] \
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/wr_gray_q_reg[3] \
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/wr_gray_q_reg[4] \
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/wr_gray_q_reg[5] \
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/wr_gray_q_reg[6] \
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/wr_bin_q_reg[7] \
+}]
+set egress_wr_gray_sync1_cells [get_cells {\
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/wr_gray_sync1_q_reg[0] \
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/wr_gray_sync1_q_reg[1] \
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/wr_gray_sync1_q_reg[2] \
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/wr_gray_sync1_q_reg[3] \
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/wr_gray_sync1_q_reg[4] \
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/wr_gray_sync1_q_reg[5] \
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/wr_gray_sync1_q_reg[6] \
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/wr_gray_sync1_q_reg[7] \
+}]
+set egress_rd_gray_src_cells [get_cells {\
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/rd_gray_q_reg[0] \
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/rd_gray_q_reg[1] \
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/rd_gray_q_reg[2] \
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/rd_gray_q_reg[3] \
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/rd_gray_q_reg[4] \
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/rd_gray_q_reg[5] \
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/rd_gray_q_reg[6] \
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/rd_bin_q_reg[7] \
+}]
+set egress_rd_gray_sync1_cells [get_cells {\
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/rd_gray_sync1_q_reg[0] \
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/rd_gray_sync1_q_reg[1] \
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/rd_gray_sync1_q_reg[2] \
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/rd_gray_sync1_q_reg[3] \
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/rd_gray_sync1_q_reg[4] \
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/rd_gray_sync1_q_reg[5] \
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/rd_gray_sync1_q_reg[6] \
+    u_top/u_probe/u_tx_egress_bridge/u_afifo/rd_gray_sync1_q_reg[7] \
+}]
 
-set_false_path -from $payload_rd_gray_src_cells -to $payload_rd_gray_sync1_cells
-set_max_delay -datapath_only 20.000 -from $payload_rd_gray_src_cells -to $payload_rd_gray_sync1_cells
-set_bus_skew 20.000 -from $payload_rd_gray_src_cells -to $payload_rd_gray_sync1_cells
+set_max_delay -datapath_only 20.000 -from $payload_wr_gray_src_cells -to $payload_wr_gray_sync1_cells
+set_bus_skew 20.000 -from $payload_wr_gray_src_cells -to $payload_wr_gray_sync1_cells
 
-set_false_path -from $ingress_meta_wr_gray_src_cells -to $ingress_meta_wr_gray_sync1_cells
-set_max_delay -datapath_only 8.000 -from $ingress_meta_wr_gray_src_cells -to $ingress_meta_wr_gray_sync1_cells
-set_bus_skew 8.000 -from $ingress_meta_wr_gray_src_cells -to $ingress_meta_wr_gray_sync1_cells
+set_max_delay -datapath_only 8.000 -from $payload_rd_gray_src_cells -to $payload_rd_gray_sync1_cells
+set_bus_skew 8.000 -from $payload_rd_gray_src_cells -to $payload_rd_gray_sync1_cells
 
-set_false_path -from $ingress_meta_rd_gray_src_cells -to $ingress_meta_rd_gray_sync1_cells
-set_max_delay -datapath_only 20.000 -from $ingress_meta_rd_gray_src_cells -to $ingress_meta_rd_gray_sync1_cells
-set_bus_skew 20.000 -from $ingress_meta_rd_gray_src_cells -to $ingress_meta_rd_gray_sync1_cells
+set_max_delay -datapath_only 20.000 -from $ingress_meta_wr_gray_src_cells -to $ingress_meta_wr_gray_sync1_cells
+set_bus_skew 20.000 -from $ingress_meta_wr_gray_src_cells -to $ingress_meta_wr_gray_sync1_cells
 
-set_false_path -from $action_wr_gray_src_cells -to $action_wr_gray_sync1_cells
+set_max_delay -datapath_only 8.000 -from $ingress_meta_rd_gray_src_cells -to $ingress_meta_rd_gray_sync1_cells
+set_bus_skew 8.000 -from $ingress_meta_rd_gray_src_cells -to $ingress_meta_rd_gray_sync1_cells
+
 set_max_delay -datapath_only 20.000 -from $action_wr_gray_src_cells -to $action_wr_gray_sync1_cells
 set_bus_skew 20.000 -from $action_wr_gray_src_cells -to $action_wr_gray_sync1_cells
 
-set_false_path -from $action_rd_gray_src_cells -to $action_rd_gray_sync1_cells
 set_max_delay -datapath_only 20.000 -from $action_rd_gray_src_cells -to $action_rd_gray_sync1_cells
 set_bus_skew 20.000 -from $action_rd_gray_src_cells -to $action_rd_gray_sync1_cells
+
+set_max_delay -datapath_only 8.000 -from $egress_wr_gray_src_cells -to $egress_wr_gray_sync1_cells
+set_bus_skew 8.000 -from $egress_wr_gray_src_cells -to $egress_wr_gray_sync1_cells
+
+set_max_delay -datapath_only 20.000 -from $egress_rd_gray_src_cells -to $egress_rd_gray_sync1_cells
+set_bus_skew 20.000 -from $egress_rd_gray_src_cells -to $egress_rd_gray_sync1_cells
 
 set_property IOSTANDARD LVCMOS33 [get_ports i_clk]
 set_property PACKAGE_PIN Y18 [get_ports i_clk]
